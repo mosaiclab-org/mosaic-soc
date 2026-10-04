@@ -1,0 +1,23 @@
+CAPI=2:
+
+name: "mosaic:ip:tdu"
+description: "MOSAIC-SoC Task Dispatch Unit"
+
+# Copyright 2026 MOSAIC-SoC contributors
+# SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+
+filesets:
+  files_rtl:
+    depend:
+      - x-heep:rtl:structs
+      - pulp-platform.org::common_cells
+    files:
+    - rtl/tdu_pkg.sv
+    - rtl/tdu.sv
+    - rtl/mosaic_clint.sv
+    file_type: systemVerilogSource
+
+targets:
+  default:
+    filesets:
+    - files_rtl

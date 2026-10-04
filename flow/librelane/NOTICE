@@ -1,0 +1,32 @@
+MOSAIC-SoC GF180MCU physical design flow (flow/librelane)
+Copyright 2026 MOSAIC-SoC contributors
+
+This directory includes files from one third-party project. It is licensed
+under the Apache License, Version 2.0. The licence text is in
+LICENSES/Apache-2.0.txt at the root of the repository.
+
+wafer-space gf180mcu-project-template
+   Copyright 2025 Leo Moser <leo.moser@pm.me> and contributors
+   Source: https://github.com/wafer-space/gf180mcu-project-template
+   Commit: 8bd0f6ff28947bf222c5288343f8f3ee1fc04632
+
+   Copied without change (byte-identical to that commit):
+     flake.nix
+     flake.lock
+     shell.nix
+     scripts/lay2img.py
+     scripts/padring.py
+
+   Modified by this project, starting from the template file of the same
+   name unless another name is given:
+     pdn_cfg.tcl             (this file also carries the notices
+                              "Copyright 2025 LibreLane Contributors" and
+                              "Copyright 2020-2022 Efabless Corporation")
+     config.yaml
+     config_classic.yaml     (from librelane/config.yaml)
+     slots/slot_mosaic.yaml  (from librelane/slots/slot_1x1.yaml)
+     src/chip_top.sv
+     src/slot_defines.svh
+     Makefile
+
+Every other file in this directory was written for MOSAIC-SoC.

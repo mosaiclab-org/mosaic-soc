@@ -1,0 +1,84 @@
+# MOSAIC-SoC hands-on tutorial
+
+This tutorial takes one small heterogeneous SoC from YAML to generated RTL and
+then proves that every configured hart executes. It also shows the same flow
+through `mosaic`, first without an LLM and then with the optional OpenCode Go
+API driver.
+
+The tutorial SoC is deliberately small:
+
+```text
+hart 0: cv32e20  TITAN  ─┐
+hart 1: FazyRV   ATLAS  ─┼─ OBI fabric ─ 32 KiB SRAM + TDU + peripherals
+hart 2: SERV     NANO   ─┘
+```
+
+All commands are run from the repository root. Expected-output blocks show the
+stable success markers; hashes, absolute paths, cycle counts, and elapsed times
+are written as `<hash>`, `<cycles>`, or `<seconds>` because they vary by machine.
+
+Before starting any path, enter the pinned simulation shell, then create and
+activate the Python environment:
+
+```bash
+nix develop .#sim
+make venv
+source .venv/bin/activate
+```
+
+`nix develop .#sim` is the simulation shell defined in `flake.nix`. It provides
+Verilator 5.050 and a bare-metal RISC-V GCC, and it exports `RISCV_TC`, the
+compiler prefix the simulation runners read. The runners accept Verilator
+5.050 and no other version. Without Nix, set `VERILATOR_PIN` and `RISCV_TC`
+yourself as described in
+[Chapter 1, Stage 0](01-generator.md#stage-0--prepare-the-tools).
+
+## Choose a path
+
+| Goal | Start here |
+|---|---|
+| Understand the generator directly | [01-generator.md](01-generator.md) |
+| Use the deterministic harness | [02-harness.md](02-harness.md) |
+| Configure the OpenCode Go API agent | [03-opencode-go.md](03-opencode-go.md) |
+| Diagnose a failure | [troubleshooting.md](troubleshooting.md) |
+
+For the shortest verified path, run the whole tutorial as one script. From
+outside the Nix shell:
+
+```bash
+nix develop .#sim --command bash tutorial/run_all.sh
+```
+
+From inside it, `./tutorial/run_all.sh` does the same. The script creates
+`.venv` itself if it is missing.
+
+Expected final lines:
+
+```text
+### RESULT: EXIT SUCCESS — all 3 configured harts executed ✓
+### Tutorial complete
+### Topology: build/tutorial/tutorial_soc_topology.html
+```
+
+The script checks the tools, then performs schema validation, semantic topology
+checks, topology rendering, direct RTL generation, manifest inspection, and the
+topology-generic full-SoC simulation. It stops at the first failed stage.
+
+## What success means
+
+The final `EXIT SUCCESS` proves that the generated full-SoC model booted the
+TITAN, dispatched the two dormant workers through the TDU, and observed the
+exact per-hart liveness sentinels. It is stronger than template rendering or a
+zero simulator return code alone.
+
+It does **not** claim physical signoff. Synthesis, place-and-route, STA, DRC, and
+LVS remain separate hard gates; see [`flow/librelane/README.md`](../flow/librelane/README.md)
+after completing this tutorial.
+
+## Files used by the tutorial
+
+- [`configs/tutorial_soc.yaml`](configs/tutorial_soc.yaml) — checked-in golden config.
+- [`inspect_manifest.py`](inspect_manifest.py) — prints a readable summary of a generated build.
+- [`run_all.sh`](run_all.sh) — executable local golden path.
+- [`../demo/README.md`](../demo/README.md) — advanced prompt-to-SoC and new-core demos.
+- [`../tb/mosaic_soc/README.md`](../tb/mosaic_soc/README.md) — full-SoC testbench details.

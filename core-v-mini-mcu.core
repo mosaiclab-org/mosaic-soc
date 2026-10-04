@@ -1,0 +1,270 @@
+CAPI=2:
+
+# Copyright 2022 OpenHW Group
+# Solderpad Hardware License, Version 2.1, see LICENSE.md for details.
+# SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+
+name: openhwgroup.org:systems:core-v-mini-mcu:1.0.5
+description: CORE-V MINI-MCU Top.
+
+filesets:
+  files_rtl_generic:
+    depend:
+    - x-heep::packages
+    - pulp-platform.org:ip:gpio
+    - pulp-platform.org::common_cells
+    - pulp-platform.org::axi:0.39.8
+    - pulp-platform.org::riscv_dbg
+    - pulp-platform.org::register_interface
+    - pulp-platform.org::serial_link
+    - openhwgroup.org:ip:soc_ctrl
+    - lowrisc:ip:uart:0.1
+    - lowrisc:ip:rv_plic_example:0.1
+    - lowrisc:ip:rv_timer:0.1
+    - lowrisc:ip:spi_host:1.0
+    - lowrisc:ip:i2c:0.1
+    - yosyshq:picorv32_spimemio:0-r1
+    - x-heep:ip:obi_spimemio
+    - x-heep:ip:boot_rom
+    - x-heep:ip:dma
+    - x-heep:ip:dma_subsystem
+    - x-heep:ip:i2s
+    - x-heep:ip:spi
+    - x-heep:ip:cluster_interconnect
+    - x-heep:ip:power_manager
+    - x-heep:ip:fast_intr_ctrl
+    - x-heep:ip:obi_fifo
+    - x-heep:ip:pdm2pcm
+    - x-heep:ip:serial_link_xheep_wrapper
+    - esl_epfl:ip:obi_spi_slave
+    - x-heep:ip:w25q128jw_controller
+    # MOSAIC-SoC: Task Dispatch Unit (multi-core scheduler assist)
+    - mosaic:ip:tdu
+    # MOSAIC-SoC: iDMA (modular DMA engine, replaces x-heep simple DMA)
+    - mosaic:ip:idma
+    files:
+    # FuseSoC otherwise exports the include files themselves without the
+    # parent search roots required by `include "idma/..." and "obi/...".
+    - hw/vendor/mosaic/idma/rtl/include/idma/typedef.svh:
+        is_include_file: true
+        include_path: hw/vendor/mosaic/idma/rtl/include
+    - hw/vendor/pulp_platform/obi/include/obi/typedef.svh:
+        is_include_file: true
+        include_path: hw/vendor/pulp_platform/obi/include
+    # core_v_mini_mcu imports these four APU sizing constants even when the
+    # selected CPU is not CV32E40P. Carry the tiny standalone package without
+    # importing the complete CV32E40P/fpnew implementation closure.
+    - hw/vendor/openhwgroup/cv32e40p/rtl/include/cv32e40p_apu_core_pkg.sv
+    # The x-heep top/testharness always expose the legacy CV-X-IF interface,
+    # including for cores that tie it off.  Keep only its type package and
+    # compatibility interface in the common closure, not the CV32E40X core.
+    - hw/vendor/openhwgroup/cv32e40x/rtl/include/cv32e40x_pkg.sv
+    - hw/vendor/openhwgroup/if_xif_compat.sv
+    - hw/core-v-mini-mcu/core_v_mini_mcu.sv
+    - hw/core-v-mini-mcu/cpu_subsystem.sv
+    - hw/core-v-mini-mcu/memory_subsystem.sv
+    - hw/core-v-mini-mcu/xbar_varlat_one_to_n.sv
+    - hw/core-v-mini-mcu/xbar_varlat_n_to_one.sv
+    - hw/core-v-mini-mcu/system_bus.sv
+    - hw/core-v-mini-mcu/system_xbar.sv
+    - hw/core-v-mini-mcu/debug_subsystem.sv
+    - hw/core-v-mini-mcu/peripheral_subsystem.sv
+    - hw/core-v-mini-mcu/ao_peripheral_subsystem.sv
+    file_type: systemVerilogSource
+
+  # Native x-heep cores are selected per resolved MOSAIC config.  Keeping
+  # them out of files_rtl_generic prevents an Ibex-only config from also
+  # importing the CVE2/OpenTitan primitive closure (and vice versa).
+  files_rtl_native_legacy:
+    depend:
+    - openhwgroup.org:ip:cv32e40p
+    - openhwgroup.org:ip:cv32e40x
+    - openhwgroup:cve2:cve2_top
+    - x-heep:ip:cv32e40px
+    files:
+    - hw/core-v-mini-mcu/cve2_xif_wrapper.sv
+    - hw/core-v-mini-mcu/cv32e40px_xif_wrapper.sv
+    file_type: systemVerilogSource
+
+  files_rtl_cv32e20:
+    depend:
+    - openhwgroup:cve2:cve2_top
+    files:
+    - hw/core-v-mini-mcu/cve2_xif_wrapper.sv
+    file_type: systemVerilogSource
+
+  files_rtl_cv32e40p:
+    depend:
+    - openhwgroup.org:ip:cv32e40p
+
+  files_rtl_cv32e40px:
+    depend:
+    - x-heep:ip:cv32e40px
+    files:
+    - hw/core-v-mini-mcu/cv32e40px_xif_wrapper.sv
+    file_type: systemVerilogSource
+
+  files_rtl_cv32e40x:
+    depend:
+    - openhwgroup.org:ip:cv32e40x
+
+  files_rtl_floonoc:
+    depend:
+    - mosaic:ip:axi_obi
+    - mosaic:ip:floonoc_fabric
+
+  # MOSAIC-SoC: Standard Core Interface (SCI) wrappers for heterogeneous
+  # cores. Depends on the vendored FazyRV and SERV cores.
+  files_rtl_mosaic_sci:
+    depend:
+    - mosaic:ip:sci
+    file_type: systemVerilogSource
+
+  rtl-simulation:
+    depend:
+    - pulp-platform.org::tech_cells_generic
+    - x-heep:sim:sram_wrapper
+    - x-heep:sim:pad_cells
+
+  x_heep_system:
+    depend:
+    - x-heep::packages
+    - x-heep:ip:pad_control
+    - x-heep:ip:pad-ring
+    files:
+    - hw/system/x_heep_system.sv
+    file_type: systemVerilogSource
+
+  tb-utils:
+    depend:
+    - x-heep::tb-utils
+    - x-heep::tb-fpu-utils
+
+  files_verilator_waiver:
+    depend:
+    - openhwgroup.org:ip:verilator_waiver
+    files:
+    - hw/core-v-mini-mcu/core_v_mini_mcu.vlt
+    - hw/ip/soc_ctrl/soc_ctrl.vlt
+    - hw/ip/obi_spimemio/obi_spimemio.vlt
+    - hw/ip/dma_subsystem/dma_subsystem.vlt
+    - hw/ip/pdm2pcm/pdm2pcm.vlt
+    - hw/ip/power_manager/power_manager.vlt
+    - hw/ip/fast_intr_ctrl/fast_intr_ctrl.vlt
+    - hw/ip/serial_link_xheep_wrapper/serial_link_xheep_wrapper.vlt
+    - hw/system/pad_control/pad_control.vlt
+    - hw/system/x_heep_system.vlt
+    file_type: vlt
+
+  # GF180MCU macro-backed scratchpad. Swaps the flip-flop sram_wrapper for real
+  # gf180mcu_fd_ip_sram cuts (four per 32-bit bank -- every GF180 cut is 8 bits
+  # wide). The blackbox views are what synthesis needs; the macro is a hard
+  # block, so its area does NOT appear in a `yosys stat` and must be added
+  # separately. See hw/asic/gf180/sram_wrapper.sv for the cut-size table.
+  rtl-gf180:
+    files:
+    - hw/asic/gf180/sram_wrapper.sv
+    file_type: systemVerilogSource
+
+  tb-verilator:
+    files:
+    - tb/XHEEP_CmdLineOptions.hh: { is_include_file: true }
+    - tb/XHEEP_CmdLineOptions.cpp
+    - tb/tb_top.cpp
+    file_type: cppSource
+
+parameters:
+  JTAG_DPI:
+    datatype: int
+    paramtype: vlogparam
+    description: |
+      Enables testbench JTAG DIPs. Admitted values: 1|0.
+    default: 0
+  USE_EXTERNAL_DEVICE_EXAMPLE:
+    datatype: int
+    paramtype: vlogparam
+    description: |
+      Enables testbench modules compilation. Admitted values: 1|0.
+    default: 1
+  USE_UPF:
+    datatype: bool
+    paramtype: vlogdefine
+    description: |
+      Enables simulation with UPF with Modelsim/VCS
+  REMOVE_OBI_FIFO:
+    datatype: bool
+    paramtype: vlogdefine
+    description: |
+      Remove the FIFO between the BUS and the peripherals subsystems
+  COMMON_CELLS_ASSERTS_OFF:
+    datatype: bool
+    description: Turn off asserts for PULP common cells
+    paramtype: vlogdefine
+    default: false
+  ASSERTS_OFF:
+    datatype: bool
+    description: Turn off asserts for PULP common cells
+    paramtype: vlogdefine
+    default: false
+
+scripts:
+  # Simulation utils
+  remove_uart_log:
+    cmd: [sh, -c, rm -f uart0.log]
+  print_uart_log:
+    cmd: [sh, -c, cat uart0.log]
+
+targets:
+  default: &default_target
+    filesets:
+    - files_rtl_generic
+    - "!mosaic_configured? (files_rtl_native_legacy)"
+    - mosaic_cv32e20? (files_rtl_cv32e20)
+    - mosaic_cv32e40p? (files_rtl_cv32e40p)
+    - mosaic_cv32e40px? (files_rtl_cv32e40px)
+    - mosaic_cv32e40x? (files_rtl_cv32e40x)
+    - mosaic_configured? (files_rtl_mosaic_sci)
+    - "!mosaic_configured? (files_rtl_floonoc)"
+    - mosaic_floonoc? (files_rtl_floonoc)
+    - target_sim ? (tool_verilator? (files_verilator_waiver))
+    toplevel: [core_v_mini_mcu]
+
+  sim:
+    <<: *default_target
+    default_tool: verilator
+    filesets_append:
+    - tb-utils
+    - rtl-simulation
+    - tool_verilator? (tb-verilator)
+    - "!integrated_heep? (x_heep_system)"
+    toplevel:
+    - tool_verilator? (testharness)
+    hooks:
+      pre_run:
+        - remove_uart_log
+      post_run:
+        - print_uart_log
+    parameters:
+    - JTAG_DPI
+    - USE_EXTERNAL_DEVICE_EXAMPLE
+    - USE_UPF
+    - REMOVE_OBI_FIFO
+    - COMMON_CELLS_ASSERTS_OFF
+    - ASSERTS_OFF
+    tools:
+      verilator:
+        mode: cc
+        verilator_options:
+          - '--sv'
+          - '--cc'
+          - '--trace'
+          - '--trace-fst'
+          - '--trace-structs'
+          - '--trace-params'
+          - '--trace-max-array 1024'
+          - '--x-assign unique'
+          - '--x-initial unique'
+          - '--exe tb_top.cpp'
+          - '-CFLAGS "-Wall -fpermissive"'
+          - '-LDFLAGS "-pthread -lutil -lelf"'
+          - "-Wall"
