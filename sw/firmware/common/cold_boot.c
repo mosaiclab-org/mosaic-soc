@@ -5,8 +5,14 @@
 
 #include <mosaic_memory_map.h>
 #include <mosaic_deployment.h>
+#ifdef MOSAIC_EFPGA_BASE
+#include "efpga.h"
+#endif
 
 #define MOSAIC_DEPLOY_MAX_ENTRIES 15u
+#define MOSAIC_DEPLOY_COPY 0u   // copy to SRAM and check the CRC32
+#define MOSAIC_DEPLOY_EFPGA 1u  // a stream for the eFPGA's BITSTREAM register
+#define MOSAIC_DEPLOY_EFPGA_UNLOAD 2u  // its unload, for a design a reset kept
 
 typedef struct {
     uint32_t magic, version, header_size, entry_count;
@@ -14,7 +20,7 @@ typedef struct {
 } deploy_header_t;
 
 typedef struct {
-    uint32_t destination, size, flash_offset, crc32;
+    uint32_t kind, destination, size, flash_offset, crc32;
 } deploy_entry_t;
 
 static uint32_t crc32_bytes(const volatile uint8_t *data, uint32_t size) {
@@ -29,7 +35,8 @@ static uint32_t crc32_bytes(const volatile uint8_t *data, uint32_t size) {
     return ~crc;
 }
 
-uint32_t mosaic_cold_boot_load_workers(void) {
+uint32_t mosaic_cold_boot_load_workers(uint32_t *efpga_failure) {
+    *efpga_failure = 0u;
     const volatile deploy_header_t *header =
         (const volatile deploy_header_t *)(uintptr_t)MOSAIC_FLASH_BASE;
     if (header->magic != MOSAIC_DEPLOYMENT_MAGIC) return 0xCB000001u;
@@ -55,11 +62,42 @@ uint32_t mosaic_cold_boot_load_workers(void) {
     for (uint32_t index = 0; index < header->entry_count; ++index) {
         /* Read fields separately: assigning a volatile struct may make GCC
          * emit a libc memcpy, which is unavailable in this freestanding ROM. */
+        const uint32_t kind = entries[index].kind;
         const uint32_t destination_address = entries[index].destination;
         const uint32_t size = entries[index].size;
         const uint32_t flash_offset = entries[index].flash_offset;
         const uint32_t expected_crc32 = entries[index].crc32;
-        if (size == 0u || destination_address > MOSAIC_SRAM_END ||
+#ifdef MOSAIC_EFPGA_BASE
+        if (kind == MOSAIC_DEPLOY_EFPGA || kind == MOSAIC_DEPLOY_EFPGA_UNLOAD) {
+            if (destination_address != MOSAIC_EFPGA_BASE || size == 0u ||
+                ((size | flash_offset) & 3u) != 0u || flash_offset >= MOSAIC_FLASH_SIZE ||
+                size > MOSAIC_FLASH_SIZE - flash_offset) {
+                return 0xCB001000u | index;
+            }
+            const volatile uint32_t *words =
+                (const volatile uint32_t *)(uintptr_t)(MOSAIC_FLASH_BASE + flash_offset);
+            /* The loader checks every frame and the CRC itself. A stream it
+             * refuses leaves the fabric isolated, cleared if it was a load:
+             * the boot goes on without it, and the caller reports the STATUS. */
+            if (kind == MOSAIC_DEPLOY_EFPGA_UNLOAD) {
+                /* After a reset that kept power the fabric still holds the
+                 * design that ran, and the loader takes only its unload. */
+                if (*mosaic_efpga_reg(MOSAIC_EFPGA_TAG) != 0u) {
+                    const uint32_t status = mosaic_efpga_load(words, size >> 2);
+                    if (!MOSAIC_EFPGA_EMPTY(status)) *efpga_failure = status | 0x80000000u;
+                }
+            } else if (*efpga_failure == 0u) {
+                const uint32_t status = mosaic_efpga_load(words, size >> 2);
+                if (MOSAIC_EFPGA_LOADED(status)) {
+                    mosaic_efpga_connect();
+                } else {
+                    *efpga_failure = status | 0x80000000u;
+                }
+            }
+            continue;
+        }
+#endif
+        if (kind != MOSAIC_DEPLOY_COPY || size == 0u || destination_address > MOSAIC_SRAM_END ||
             size > MOSAIC_SRAM_END - destination_address ||
             flash_offset >= MOSAIC_FLASH_SIZE ||
             size > MOSAIC_FLASH_SIZE - flash_offset) {

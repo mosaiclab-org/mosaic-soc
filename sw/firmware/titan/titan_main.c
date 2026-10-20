@@ -130,8 +130,9 @@ static void signal_failure(uint32_t code);
  */
 int main(void) {
     system_init();
+    uint32_t efpga_failure = 0u;
 #ifdef MOSAIC_FLASH_XIP
-    const uint32_t cold_boot_status = mosaic_cold_boot_load_workers();
+    const uint32_t cold_boot_status = mosaic_cold_boot_load_workers(&efpga_failure);
     if (cold_boot_status != 0u) {
         signal_failure(cold_boot_status);
     }
@@ -144,6 +145,10 @@ int main(void) {
     tdu_configure();
     dispatch_workers();
     wait_for_completion();
+    /* The workers ran without the fabric: report the bitstream it refused. */
+    if (efpga_failure != 0u) {
+        signal_failure(efpga_failure);
+    }
     signal_success();
 
     /* Should never reach here. */

@@ -231,13 +231,26 @@ $(ATLAS_BIN): $(ATLAS_ELF)
 $(NANO_BIN): $(NANO_ELF)
 	$(OBJCOPY) -O binary $< $@
 
-$(FLASH_BIN): $(TITAN_BIN) $(ATLAS_BIN) $(NANO_BIN) $(MOSAIC_GENERATED_ROOT)/sw/boot_images.json
+# EFPGA_STREAM: the stream of an eFPGA design (<design>.hex of
+# util/mosaic_gen/efpga_gen.py), packed for TITAN to load before it wakes the
+# workers, with EFPGA_UNLOAD, its unload stream, for a design a reset kept in
+# the fabric. Only on a design with soc.efpga. Absolute paths: make -C changes
+# directory. The stamp records them, so that changing them packs again.
+EFPGA_UNLOAD ?= $(if $(EFPGA_STREAM),$(EFPGA_STREAM:.hex=.unload.hex))
+EFPGA_STAMP = $(BUILD)/efpga_streams
+$(EFPGA_STAMP): FORCE | $(BUILD)
+	@echo '$(EFPGA_STREAM) $(EFPGA_UNLOAD)' | cmp -s - $@ || echo '$(EFPGA_STREAM) $(EFPGA_UNLOAD)' > $@
+FORCE:
+
+$(FLASH_BIN): $(TITAN_BIN) $(ATLAS_BIN) $(NANO_BIN) $(MOSAIC_GENERATED_ROOT)/sw/boot_images.json \
+		$(EFPGA_STREAM) $(EFPGA_UNLOAD) $(EFPGA_STAMP)
 	@echo "  PACK  $@"
 	$(PYTHON) $(ROOT)/util/mosaic_gen/pack_flash.py \
 		--manifest $(MOSAIC_GENERATED_ROOT)/sw/boot_images.json \
 		--image $(TITAN_IMAGE)=$(TITAN_BIN) \
 		--image $(ATLAS_IMAGE)=$(ATLAS_BIN) \
-		--image $(NANO_IMAGE)=$(NANO_BIN) --output $@
+		--image $(NANO_IMAGE)=$(NANO_BIN) \
+		$(if $(EFPGA_STREAM),--efpga $(EFPGA_STREAM) --efpga-unload $(EFPGA_UNLOAD)) --output $@
 
 $(FLASH_HEX) $(FLASH_JSON): $(FLASH_BIN)
 	@test -f $@

@@ -17,6 +17,7 @@
       "power-aware": "tdu_pkg::SCHED_POWER_AWARE",
   }[sched_mode]
   nh = xheep.num_harts()
+  efpga = xheep.get_extension("efpga")
 %>
 
 
@@ -124,6 +125,12 @@ module ao_peripheral_subsystem
     // EXTERNAL PERIPH
     output reg_req_t ext_peripheral_slave_req_o,
     input  reg_rsp_t ext_peripheral_slave_resp_i,
+% if efpga:
+
+    // The registers of the eFPGA, instantiated in mosaic_soc
+    output reg_req_t efpga_req_o,
+    input  reg_rsp_t efpga_rsp_i,
+% endif
 
     // SPC interface
     input  logic [mosaic_soc_pkg::DMA_CH_NUM-1:0] ext_dma_slot_tx_i,
@@ -201,6 +208,10 @@ module ao_peripheral_subsystem
   /* Peripheral demuxed register interface */
   assign ext_peripheral_slave_req_o = ao_peripheral_slv_req[mosaic_soc_pkg::EXT_PERIPHERAL_IDX];
   assign ao_peripheral_slv_rsp[mosaic_soc_pkg::EXT_PERIPHERAL_IDX] = ext_peripheral_slave_resp_i;
+% if efpga:
+  assign efpga_req_o = ao_peripheral_slv_req[mosaic_soc_pkg::EFPGA_IDX];
+  assign ao_peripheral_slv_rsp[mosaic_soc_pkg::EFPGA_IDX] = efpga_rsp_i;
+% endif
 
 
 % if base_peripheral_domain.contains_peripheral('pad_control'):

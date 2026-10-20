@@ -85,14 +85,16 @@ repository is a layout that passes the signoff checks.
 |---|---|---|
 | Signoff-clean on GF180MCU | Block A, the GF180MCU reference design: two SERV harts, no on-chip SRAM pool, code executed in place from external flash (`configs/mosaic_tapeout_ultra.yaml`) | Run `blocka_d15_rstsync`: a 1.2321 mm2 die at 82.9% utilisation, with design-rule, layout-versus-schematic, XOR, antenna and power-grid checks at zero and positive setup and hold slack on a 50 ns clock. Two waivers, recorded on 2026-09-24 and due for review on 2026-11-30. |
 | Hardened but not tapeout-qualified | Block B (three SERV harts, `configs/mosaic_blockb_3hart.yaml`) and Block C (four SERV harts, `configs/mosaic_blockc_4hart.yaml`) | Runs `blockb_sdc`, `blockb_m45`, `blockc_sdc` and `blockc_m45` pass the hard checks and timing. They report fan-out violations that no waiver accepts, and `target: tapeout` refuses both designs. |
-| RTL and simulation only | Everything else: every core other than SERV, the `log` and `floonoc` bus fabrics, any design with an on-chip SRAM pool, external RAM, the DMA, the debug module or the interrupt controller, and any design on `pdk: sky130` or `pdk: ihp-sg13g2` | Verilator simulation of the complete SoC. No layout. |
+| RTL and simulation only | Everything else: every core other than SERV, the `log` and `floonoc` bus fabrics, any design with an on-chip SRAM pool, external RAM, the DMA, the debug module or the interrupt controller, and any design on `pdk: sky130` or `pdk: ihp-sg13g2` | No layout. Simulation coverage differs by feature and some have none: see [Verification](#verification). |
 
 Layout files are not in version control. The repository tracks only the
 `final/metrics.json` of the runs it cites. [docs/status.md](docs/status.md)
 lists what is proven, how each claim is checked, and the known defects.
-Status as of 2026-10-03.
+The levels rank physical evidence only; [Verification](#verification) says
+which features a simulated test covers. Status as of 2026-10-13; the eFPGA
+rows as of 2026-10-19.
 
-## Supported cores
+## Cores
 
 Fourteen cores are registered in `util/mosaic_gen/core_registry.py`. Cores that
 do not speak OBI (Open Bus Interface, the bus X-HEEP uses) are wrapped by a
@@ -137,14 +139,16 @@ design has workers.
 
 **DMA.** `soc.dma` selects the direct memory access engine: `idma`, the
 pulp-platform iDMA and the default; `none`, for area-critical designs that
-never copy bulk data; or `xheep`, X-HEEP's simple DMA, accepted only for
-single-core designs.
+never copy bulk data; or `xheep`, meant to select X-HEEP's simple DMA and
+accepted only for single-core designs. It does not work yet: the generated
+design still contains the iDMA.
 
 **Interrupt controllers.** A CLINT (`hw/tdu/rtl/mosaic_clint.sv`) gives each
 hart a software interrupt and a 64-bit timer comparator. The platform-level
 interrupt controller is OpenTitan's `rv_plic`, regenerated for the number of
 harts in the configuration; `soc.plic: false` removes it. The platform services
-support at most 16 harts.
+allow at most 16 harts; the largest design in the regression sweep has seven.
+No test delivers an interrupt to a hart yet.
 
 **Memory.** Three profiles: an on-chip SRAM pool of 8 to 512 KB; no on-chip
 SRAM, with every hart executing in place from memory-mapped SPI flash and an
@@ -152,10 +156,57 @@ optional scratchpad of 64 to 512 bytes; or no on-chip SRAM with an off-chip RAM
 region.
 
 **Peripherals.** `soc.peripherals` accepts `uart`, `gpio`, `timer`, `spi`,
-`i2c` and `serial_link`. The blocks come from X-HEEP and OpenTitan.
+`i2c` and `serial_link`. The blocks come from X-HEEP and OpenTitan. Of the six,
+only the UART has a test today.
 
 [docs/architecture.md](docs/architecture.md) describes each of these, with the
 memory map and the TDU register table.
+
+## Verification
+
+MOSAIC-SoC is built for professional use, so its bar is strict: a feature
+counts as tested only when a bench exercises it in simulation and checks the
+result. Validating a configuration or rendering a template is not that test.
+
+What a test covers today, and how far:
+
+| Feature | Test | What it shows |
+|---|---|---|
+| Ten of the fourteen cores, in the complete SoC | the `wake_*` and `titan_smp_*` steps of the regression sweep | Liveness. Every hart runs a few instructions from SRAM and must store its word before the bench prints `EXIT SUCCESS`. These programs are plain RV32I: they use neither the M or C extensions nor RV64, and take no trap. |
+| QERV | `mosaic_sci_wakeloop`, `mosaic_sci_cocotb` | Dormancy, wake and execution in the generated CPU subsystem, not in the complete SoC. |
+| Bus fabrics `obi`, `log`, `floonoc` | `wake_obi`, `wake_log`, `wake_floonoc`, `titan_smp_*` | Hart access to SRAM, the TDU and the SoC controller. The flash window and a user peripheral are reached on `obi` only. |
+| TDU | `tdu_soc_cocotb`, the wake and `titan_smp_*` steps, `firmware_7hart` | Wake, and a task queue of up to three entries. A full queue of eight, the TDU interrupt, and parking a hart then waking it again are not tested. |
+| Boot by executing in place from SPI flash | `firmware_7hart`, `generic_boot_blocka` | The boot ROM hands off to the flash and the orchestrator runs there, against a behavioural flash model. |
+| UART | `uart_bringup_blocka` | On Block A only: polled transmit, and receive through the internal loopback. The receive pin and the interrupts are not tested. |
+| iDMA | `idma_cocotb` | Copies as a block against a testbench memory. No program drives it in the complete SoC. |
+| eFPGA fabric, alone | `efpga_fabric` | A FABulous fabric of 64 LUT4, generated by pinned tools, is configured with the real bitstream of an 8-bit counter and matches the counter's RTL for 600 cycles, in Icarus and in Verilator; in each simulator six faulty configurations must each fail for the reason expected of it. The testbench is the loader ([docs/efpga.md](docs/efpga.md)). |
+| eFPGA fabric as a bus peripheral | `efpga_wrapper`, `efpga_soc`, `efpga_design` | A wrapper around the fabric with its own loader, unload, isolation and bus timeout. Alone, with the testbench as bus master: 50 runs in Icarus and Verilator, 46 of them negative controls; a design that has run is kept through a reset, removed by its unload stream and replaced. In the wake-demonstration SoC generated with `soc.efpga`: hart 0 writes a bitstream through a register of the wrapper, reads and writes two registers of the user design, unloads it and loads it again; a request before configuration and a design that never answers are both answered by the wrapper; and the production firmware, booting from flash, loads a design from its deployment table before it wakes the workers, or reports a refused one after they ran. One command takes a user's Verilog, written against the shell of the preset, to that boot; it shows the design loaded and configured, not used. Only the `obi` bus takes the key, the fabric's pads stay inside the SoC, `clear` does not remove a design that has run safely (its unload does), and there is no layout. |
+
+Not tested yet:
+
+- **Boot from SRAM.** Every bench that runs from SRAM has the testbench write
+  the program into the RAM. The boot ROM's copy from flash to RAM is selected
+  by no bench, and the orchestrator firmware built to run from SRAM is neither
+  built nor simulated by a regression step.
+- **Five of the six peripherals**: GPIO, the timer, the SPI host, I2C and the
+  serial link. I2C and the serial link are in no design the sweep builds.
+- **The always-on blocks**: the always-on GPIO and timer, the fast interrupt
+  controller and the power manager.
+- **Interrupts.** No hart takes one, so the CLINT and the PLIC are untested in
+  the complete SoC.
+- **The JTAG debug module.** Every bench disables the simulation JTAG bridge.
+- **The generated C start-up code.** No program links it.
+- **Ibex, cv32e40p and cv32e40px.** No bench runs them.
+- **Two memory profiles**: external RAM, and execute in place without a
+  scratchpad. Software generation refuses both, so neither can be simulated.
+- **`soc.dma: xheep`**, which does not yet select X-HEEP's DMA.
+
+`tdu_soc_cocotb` and `idma_cocotb` need `make mcu-gen` once in a fresh clone.
+The sweep is run by hand: there is no continuous integration. Closing these
+gaps comes before new features; the eFPGA fabric is the one feature started
+alongside them. [docs/roadmap.md](docs/roadmap.md) lists the
+tests to write, [docs/verification.md](docs/verification.md) describes each
+bench and [docs/status.md](docs/status.md) the known defects.
 
 ## Requirements and quick start
 
@@ -324,15 +375,34 @@ Its limits:
 [docs/physical-flow.md](docs/physical-flow.md) describes the gates, the
 waivers and the measured results of every tracked run.
 
+## What is not included
+
+MOSAIC-SoC keeps X-HEEP's hardware platform, its boot ROM and its device
+library. It replaces X-HEEP's software build with linker scripts and memory-map
+headers generated for each boot image and with its own firmware
+(`sw/firmware/`, `tb/mosaic_soc/`), and it drops the FPGA and board layers.
+
+It has no FPGA target and no board flow, none of X-HEEP's example applications,
+no CMake build, no peripheral SDK, no RTOS port, no SystemC testbench, no
+OpenOCD configuration for the generated SoC and no flash programmer. The device
+library under `sw/device/lib/` is X-HEEP's, plus one driver written here
+(`drivers/idma/`); it is carried for its register and helper headers, and no
+flow builds any of its drivers.
+
+[UPSTREAM.md](UPSTREAM.md), section 4, lists the upstream parts that were left
+out. Among them are X-HEEP's application regression, which is how these
+peripherals are tested upstream, and its continuous integration.
+
 ## Repository layout
 
 | Path | Contents |
 |---|---|
-| `mosaic.yaml`, `configs/` | the default configuration and the shipped ones |
-| `util/mosaic_gen/` | the generator; `core_registry.py` holds the supported cores and the validation rules |
+| `mosaic.yaml`, `configs/` | the default configuration and the shipped ones; `configs/efpga/` holds the eFPGA fabric presets |
+| `util/mosaic_gen/` | the generator; `core_registry.py` holds the registered cores and the validation rules |
 | `hw/mosaic_soc/` | the SoC templates (`*.sv.tpl`): top level, CPU subsystem, bus, memory, peripherals |
 | `hw/sci/` | the SCI wrappers |
 | `hw/tdu/` | the TDU and the CLINT |
+| `hw/efpga/` | the wrapper that makes an eFPGA fabric a bus peripheral; `soc.efpga` puts it in `mosaic_soc` |
 | `hw/vendor/mosaic/` | vendored cores, iDMA, FlooNoC and the bus bridges |
 | `hw/vendor/` (other) | upstream X-HEEP, OpenHW, pulp-platform and OpenTitan IP |
 | `sw/` | device libraries, firmware and linker scripts |
@@ -353,8 +423,9 @@ Generated RTL is a build product. Only the templates are committed.
 | [tutorial/README.md](tutorial/README.md) | a hands-on walk from YAML to a simulated SoC |
 | [docs/architecture.md](docs/architecture.md) | the generated SoC and the generator pipeline |
 | [docs/configuration.md](docs/configuration.md) | every configuration key |
-| [docs/cores.md](docs/cores.md) | the supported cores and how to add one |
+| [docs/cores.md](docs/cores.md) | the registered cores and how to add one |
 | [docs/verification.md](docs/verification.md) | the testbenches, the regression sweep and the configuration-space matrix |
+| [docs/efpga.md](docs/efpga.md) | the eFPGA fabric and its wrapper: what is generated and simulated today |
 | [docs/physical-flow.md](docs/physical-flow.md) | hardening, gates, waivers and measured results |
 | [docs/agent-harness.md](docs/agent-harness.md) | the `mosaic` tool, scopes, approvals and agent hosts |
 | [docs/reproducing.md](docs/reproducing.md) | the pinned toolchain |

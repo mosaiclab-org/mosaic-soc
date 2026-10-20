@@ -19,6 +19,7 @@ from peripherals.base_peripherals import (
     Ext_peripheral,
     Pad_control,
     GPIO_ao,
+    Efpga,
 )
 from .user_peripherals import (
     RV_plic,
@@ -59,6 +60,7 @@ def load_peripherals_config(system, config: hjson.OrderedDict):
         "ext_peripheral": lambda o, l: Ext_peripheral(o, l),
         "pad_control": lambda o, l: Pad_control(o, l),
         "gpio_ao": lambda o, l: GPIO_ao(o, l),
+        "efpga": lambda o, l: Efpga(o, l),
     }
 
     # User peripherals are peripherals in the user-controllable domain

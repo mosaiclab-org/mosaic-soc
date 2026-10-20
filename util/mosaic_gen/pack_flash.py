@@ -4,6 +4,11 @@
 The x-heep boot ROM enables the memory-mapped flash window and jumps to byte
 offset 0x180.  A compact table below that entry point describes worker images;
 the TITAN cold-boot loader copies and CRC-checks them before TDU wake-up.
+With --efpga, the last entries hold the stream of an eFPGA design (a
+<design>.hex of util/mosaic_gen/efpga_gen.py) and, with --efpga-unload, its
+unload stream: the loader writes the unload to the BITSTREAM register of the
+design's eFPGA (soc.efpga) if a reset kept a design in the fabric, then the
+stream, before it wakes the workers.
 """
 
 from __future__ import annotations
@@ -18,11 +23,15 @@ from typing import Sequence
 
 
 MAGIC = 0x4D4F5341
-VERSION = 1
+VERSION = 2  # 2: each entry starts with its kind
 TITAN_OFFSET = 0x180
 FLASH_SIZE = 0x0100_0000
 HEADER = struct.Struct("<8I")
-ENTRY = struct.Struct("<4I")
+ENTRY = struct.Struct("<5I")  # kind, destination, size, flash_offset, crc32
+KIND_COPY = 0  # copy to SRAM at destination and check its CRC32
+KIND_EFPGA = 1  # write the words to the BITSTREAM register at destination
+KIND_EFPGA_UNLOAD = 2  # the same, first, only if the fabric holds a design
+MAX_ENTRIES = 15  # MOSAIC_DEPLOY_MAX_ENTRIES of sw/firmware/common/cold_boot.c
 
 
 class PackError(RuntimeError):
@@ -40,7 +49,13 @@ def _verilog_hex(data: bytes) -> str:
     return "\n".join(lines) + "\n"
 
 
-def pack(manifest_path: Path, image_paths: dict[int, Path], output: Path) -> dict:
+def pack(
+    manifest_path: Path,
+    image_paths: dict[int, Path],
+    output: Path,
+    efpga_stream: Path | None = None,
+    efpga_unload: Path | None = None,
+) -> dict:
     manifest = json.loads(manifest_path.read_text())
     images = manifest.get("images")
     if not isinstance(images, list) or not images:
@@ -71,7 +86,7 @@ def pack(manifest_path: Path, image_paths: dict[int, Path], output: Path) -> dic
         if image_id != titan_id:
             placements[image_id] = cursor
             crc = binascii.crc32(blob) & 0xFFFF_FFFF
-            entries.append((int(item["load_address"], 0), len(blob), cursor, crc))
+            entries.append((KIND_COPY, int(item["load_address"], 0), len(blob), cursor, crc))
             cursor = _align(cursor + len(blob), 0x1000)
         deployments.append(
             {
@@ -93,6 +108,33 @@ def pack(manifest_path: Path, image_paths: dict[int, Path], output: Path) -> dic
             }
         )
 
+    streams = {}  # kind -> (bytes, its deployment record)
+    if efpga_stream is not None or efpga_unload is not None:
+        if "efpga" not in manifest:
+            raise PackError("the design has no eFPGA (soc.efpga) to load a bitstream into")
+        if efpga_stream is None or efpga_unload is None:
+            raise PackError("--efpga and --efpga-unload go together: a reset keeps the "
+                            "design in the fabric, which only its unload removes")
+        destination = manifest["efpga"]["registers"]
+        for kind, path in ((KIND_EFPGA_UNLOAD, efpga_unload), (KIND_EFPGA, efpga_stream)):
+            words = [int(word, 16) for word in path.read_text().split()]
+            if not words or any(not 0 <= word < 1 << 32 for word in words):
+                raise PackError(f"{path}: not a stream of 32-bit words, one per line")
+            stream = struct.pack(f"<{len(words)}I", *words)
+            crc = binascii.crc32(stream) & 0xFFFF_FFFF
+            entries.append((kind, int(destination, 0), len(stream), cursor, crc))
+            streams[kind] = stream, {
+                "destination": destination,
+                "flash_offset": f"0x{cursor:08X}",
+                "size": len(stream),
+                "crc32": f"0x{crc:08X}",
+                "sha256": hashlib.sha256(stream).hexdigest(),
+                "source": path.name,
+            }
+            cursor = _align(cursor + len(stream), 0x1000)
+    if len(entries) > MAX_ENTRIES:
+        raise PackError(f"{len(entries)} table entries; the cold-boot loader takes {MAX_ENTRIES}")
+
     entry_bytes = b"".join(ENTRY.pack(*entry) for entry in entries)
     header_size = HEADER.size + len(entry_bytes)
     if header_size > TITAN_OFFSET:
@@ -110,6 +152,9 @@ def pack(manifest_path: Path, image_paths: dict[int, Path], output: Path) -> dic
     for image_id, offset in placements.items():
         blob = binaries[image_id]
         flash[offset : offset + len(blob)] = blob
+    for stream, record in streams.values():
+        offset = int(record["flash_offset"], 0)
+        flash[offset : offset + len(stream)] = stream
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(flash)
@@ -129,6 +174,8 @@ def pack(manifest_path: Path, image_paths: dict[int, Path], output: Path) -> dic
             "crc32": f"0x{table_crc:08X}",
         },
         "images": deployments,
+        "efpga_bitstream": streams.get(KIND_EFPGA, (None, None))[1],
+        "efpga_unload": streams.get(KIND_EFPGA_UNLOAD, (None, None))[1],
     }
     output.with_suffix(".json").write_text(json.dumps(deployment, indent=2, sort_keys=True) + "\n")
     return deployment
@@ -139,6 +186,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--image", action="append", default=[], metavar="ID=BIN")
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--efpga", type=Path, metavar="STREAM.hex",
+                        help="the stream of an eFPGA design, loaded before the workers wake")
+    parser.add_argument("--efpga-unload", type=Path, metavar="STREAM.unload.hex",
+                        help="its unload stream, for a design a reset kept in the fabric")
     args = parser.parse_args(argv)
     paths: dict[int, Path] = {}
     for value in args.image:
@@ -151,7 +202,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error(f"duplicate image ID {image_id}")
         paths[image_id] = Path(raw_path)
     try:
-        pack(args.manifest, paths, args.output)
+        pack(args.manifest, paths, args.output, args.efpga, args.efpga_unload)
     except (OSError, KeyError, TypeError, ValueError, PackError) as exc:
         parser.error(str(exc))
     return 0

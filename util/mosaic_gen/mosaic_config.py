@@ -25,6 +25,8 @@ from memory_ss.memory_ss import MemorySS
 try:
     from .core_registry import (
         CORE_SPECS,
+        EFPGA_WINDOW_BASE,
+        EFPGA_WINDOW_SIZE,
         FLASH_XIP_BASE,
         FLASH_XIP_SIZE,
         SCI_CORES,
@@ -37,6 +39,8 @@ try:
 except ImportError:  # mcu_gen adds util/mosaic_gen directly to sys.path
     from core_registry import (
         CORE_SPECS,
+        EFPGA_WINDOW_BASE,
+        EFPGA_WINDOW_SIZE,
         FLASH_XIP_BASE,
         FLASH_XIP_SIZE,
         SCI_CORES,
@@ -138,6 +142,8 @@ class MosaicConfig:
     gpio_ao: bool = True
     ao_rv_timer: bool = True     # mosaic_clint still serves per-hart timers
     ao_fast_intr: bool = True
+    # soc.efpga, e.g. {"preset": "small"}; None: no fabric (docs/efpga.md).
+    efpga: Optional[Dict[str, Any]] = None
 
     # Derived fields (set during build())
     total_cores: int = 0
@@ -313,6 +319,7 @@ def parse_yaml(path: PurePath) -> MosaicConfig:
     cfg.gpio_ao = soc.get("gpio_ao", True)
     cfg.ao_rv_timer = soc.get("ao_rv_timer", True)
     cfg.ao_fast_intr = soc.get("ao_fast_intr", True)
+    cfg.efpga = soc.get("efpga")
     cfg.bus = soc.get("bus", "obi")
     if cfg.bus not in VALID_BUS_TYPES:
         raise RuntimeError(
@@ -543,6 +550,12 @@ def mosaic_to_xheep_kwargs(
     system.add_extension("spi_mode", cfg.spi_mode)
     system.add_extension("ao_rv_timer", cfg.ao_rv_timer)
     system.add_extension("ao_fast_intr", cfg.ao_fast_intr)
+    # mcu_gen adds the geometry of the generated fabric before rendering.
+    system.add_extension(
+        "efpga",
+        cfg.efpga
+        and {**cfg.efpga, "window_base": EFPGA_WINDOW_BASE, "window_size": EFPGA_WINDOW_SIZE},
+    )
     system.add_extension("sched_mode", cfg.scheduler.mode)
     system.add_extension("sched_mode_value", cfg.scheduler.mode_value)
     system.add_extension("resolved_harts", tuple(cfg.harts))
@@ -742,6 +755,15 @@ def _resolve_base_config(config: dict, cfg: "MosaicConfig") -> dict:
             dma_cfg["is_included"] = "no"
         else:
             dma_cfg["is_included"] = "yes"
+
+    efpga_cfg = config["ao_peripherals"].get("efpga")
+    if efpga_cfg is not None:
+        efpga_cfg["is_included"] = "yes" if cfg.efpga else "no"
+    elif cfg.efpga:
+        raise RuntimeError(
+            "[MOSAIC] soc.efpga needs the always-on peripheral `efpga` in the base "
+            "configuration, as in configs/general.hjson"
+        )
 
     gpio_ao_cfg = config["ao_peripherals"].get("gpio_ao")
     if gpio_ao_cfg is not None:

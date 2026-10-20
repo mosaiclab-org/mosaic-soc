@@ -37,6 +37,7 @@ module tb_top #(
 
   // cycle counter
   int unsigned        cycle_cnt_q;
+  int                 warm_reboots;
 
   // testbench result
   wire                exit_valid;
@@ -183,6 +184,20 @@ module tb_top #(
 
     if ($test$plusargs("verbose")) $display("reset deasserted", $time);
 
+    // +warm_reboots=<n>: the first n successful exits pulse the reset instead
+    // of ending the run, as a reset pin or a debugger would. The SoC boots
+    // again with what a reset keeps: the flash model, the SRAM, an eFPGA's
+    // configuration latches. Only a boot from flash (+boot_sel=1) runs again.
+    if ($value$plusargs("warm_reboots=%d", warm_reboots)) begin
+      repeat (warm_reboots) begin
+        do @(negedge clk); while (!(rst_n && exit_valid && exit_value == 0));
+        $display("[TESTBENCH] %t: warm reboot", $time);
+        rst_n = 1'b0;
+        repeat (RESET_WAIT_CYCLES) @(posedge clk);
+        #RESET_DEL rst_n = 1'b1;
+      end
+    end
+
   end : reset_gen
 
   // set timing format
@@ -207,7 +222,7 @@ module tb_top #(
 
   // check if we succeded
   always_ff @(posedge clk, negedge rst_n) begin
-    if (exit_valid) begin
+    if (rst_n && exit_valid) begin
       if (exit_value == 0) begin
         $display("EXIT SUCCESS");
         $finish;

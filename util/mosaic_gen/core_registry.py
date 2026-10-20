@@ -340,6 +340,14 @@ EXT_SLAVE_SIZE_KB = 0x0100_0000 // 1024
 # in `_execute_from_flash`. This is what lets workers run with no RAM at all.
 FLASH_XIP_BASE = 0x4000_0000
 FLASH_XIP_SIZE = 0x0100_0000
+
+# The eFPGA (soc.efpga, docs/efpga.md): a FABulous fabric behind
+# hw/efpga/mosaic_efpga.sv. Its registers are the always-on peripheral `efpga`
+# of configs/general.hjson; its user window is this system-bus slave. A preset
+# is configs/efpga/<name>.csv.
+EFPGA_WINDOW_BASE = 0x5000_0000
+EFPGA_WINDOW_SIZE = 0x0000_1000
+VALID_EFPGA_PRESETS = frozenset({"small"})
 TAPEOUT_CORE_MATRIX = (
     {
         "ip": "serv",
@@ -659,6 +667,7 @@ def validate_soc_config(cfg: Any, allow_sim_only: bool = True) -> List[str]:
             "name", "pdk", "profile", "target", "cores", "memory", "bus", "bus_opts",
             "scheduler", "peripherals", "dma", "debug", "plic", "spi_mode",
             "multicore_timer", "gpio_ao", "ao_rv_timer", "ao_fast_intr",
+            "efpga",
         }
     )
     errors.extend(_unknown_keys("soc", soc, allowed_soc))
@@ -864,6 +873,24 @@ def validate_soc_config(cfg: Any, allow_sim_only: bool = True) -> List[str]:
         if type(value) is not bool:
             errors.append(
                 f"soc.{key} must be a boolean, got {type(value).__name__}"
+            )
+
+    efpga = soc.get("efpga")
+    if efpga is not None:
+        if not isinstance(efpga, dict):
+            errors.append("soc.efpga must be a mapping")
+        else:
+            errors.extend(_unknown_keys("soc.efpga", efpga, frozenset({"preset"})))
+            preset = efpga.get("preset")
+            if not isinstance(preset, str) or preset not in VALID_EFPGA_PRESETS:
+                errors.append(
+                    f"soc.efpga.preset {preset!r} not in {sorted(VALID_EFPGA_PRESETS)}"
+                )
+        # Only the OBI crossbar has the slave of the user window; the LOG and
+        # FlooNoC fabrics list their non-memory slaves separately.
+        if soc.get("bus", "obi") != "obi":
+            errors.append(
+                f"soc.efpga needs bus 'obi'; {soc.get('bus')!r} has no eFPGA slave"
             )
 
     spi_mode = soc.get("spi_mode", "full")

@@ -70,6 +70,7 @@ soc:
 | `gpio_ao` | boolean | `true` | The always-on GPIO block. |
 | `ao_rv_timer` | boolean | `true` | The always-on timer. |
 | `ao_fast_intr` | boolean | `true` | The always-on fast interrupt controller. |
+| `efpga` | mapping with `preset: small` | absent | An eFPGA fabric in the SoC: registers at `0x200C_0000`, user window at `0x5000_0000`. Needs `bus: obi`. The physical flow refuses it, at any target, until the wrapper is synthesised. Generating it needs `nix develop .#efpga`, which the generator enters itself. See [efpga.md](efpga.md). |
 | `objectives` | mapping | absent | Physical-design intent. See [Objectives](#objectives). |
 
 The total number of harts across all groups is at most 16.

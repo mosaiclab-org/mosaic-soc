@@ -23,9 +23,24 @@
 #
 # Needs: Verilator + a RISC-V GCC (rv32i, ld-linked, no multilib).
 # Usage: tb/mosaic_soc/run_fw.sh   (MOSAIC_CFG / RISCV_TC override)
+#
+# EFPGA_DESIGN=<design>.v, on a configuration with soc.efpga: the user design
+# for its eFPGA, a module named after its file whose ports are those of the
+# shell (docs/efpga.md). It is compiled for the SoC's fabric
+# (util/mosaic_gen/efpga_gen.py --shell, in `nix develop .#efpga`, entered
+# here) and packed into the flash image, and TITAN loads it at cold boot
+# before it wakes the workers: EXIT SUCCESS then also means the design was
+# configured. A design the loader refuses ends the run with its STATUS.
+# WARM_REBOOTS=<n>: reset the SoC after each of the first n successful boots
+# (tb/tb_top.sv +warm_reboots), with the flash and an eFPGA's latches kept.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
+if [ -n "${EFPGA_DESIGN:-}" ]; then  # relative to the caller
+  EFPGA_DESIGN="$(realpath -e "$EFPGA_DESIGN")" || { echo "EFPGA_DESIGN: no such file"; exit 1; }
+fi
+EFPGA_DESIGN="${EFPGA_DESIGN:-}"
+WARM_REBOOTS="${WARM_REBOOTS:-0}"
 cd "$REPO"
 source "$REPO/tb/tools.sh"
 mosaic_need_riscv_tc
@@ -38,7 +53,8 @@ PY="$REPO/.venv/bin/python"
 echo "### [1/4] generating RTL ($MOSAIC_CFG) ..."
 TPLS=$(mosaic_templates)
 "$PY" util/mosaic_gen/mcu_gen.py --mosaic_config "$MOSAIC_CFG" --base_config configs/general.hjson \
-    --pads_cfg configs/pad_cfg.py --output-root build/mosaic --outtpl "$TPLS" --externaltpl "" >/dev/null 2>&1 || { echo "RTL gen failed"; exit 1; }
+    --pads_cfg configs/pad_cfg.py --output-root build/mosaic --outtpl "$TPLS" --externaltpl "" \
+    > "$HERE/mcu-gen.log" 2>&1 || { echo "RTL gen failed — see $HERE/mcu-gen.log"; exit 1; }
 MANIFEST="$("$PY" util/mosaic_gen/build_manifest.py locate --config "$MOSAIC_CFG" \
     --base-config configs/general.hjson --pads-cfg configs/pad_cfg.py --repo-root "$REPO")" || exit 1
 MOSAIC_GENERATED_ROOT="$("$PY" -c \
@@ -60,9 +76,25 @@ COMPILER_PREFIX="${COMPILER_PREFIX:-$(basename "$TC" | sed 's/elf$//')}" \
 BUILD_ROOT="$(sed -n 's/^FUSESOC_BUILD_ROOT=//p' "$HERE/fusesoc-setup.log" | tail -1)"
 [ -n "$BUILD_ROOT" ] && [ -d "$BUILD_ROOT" ] || { echo "FuseSoC build root missing"; exit 1; }
 
+EFPGA_STREAM=
+if [ -n "$EFPGA_DESIGN" ]; then
+  echo "###       compiling $EFPGA_DESIGN for the eFPGA ..."
+  [ -f "$MOSAIC_GENERATED_ROOT/efpga/manifest.json" ] \
+      || { echo "$MOSAIC_CFG has no eFPGA (soc.efpga)"; exit 1; }
+  gen=(python3 util/mosaic_gen/efpga_gen.py --fabric "$MOSAIC_GENERATED_ROOT/efpga"
+       --out "$MOSAIC_GENERATED_ROOT/efpga_design" --shell "$EFPGA_DESIGN")
+  if command -v FABulous >/dev/null; then
+    "${gen[@]}" > "$HERE/efpga-design.log" 2>&1
+  else
+    nix develop "$REPO#efpga" --option warn-dirty false --command "${gen[@]}" \
+        > "$HERE/efpga-design.log" 2>&1
+  fi || { echo "eFPGA compilation failed — see $HERE/efpga-design.log"; exit 1; }
+  EFPGA_STREAM="$MOSAIC_GENERATED_ROOT/efpga_design/bitstream/$(basename "${EFPGA_DESIGN%.*}").hex"
+fi
+
 echo "### [2/4] building the production firmware (sw/firmware, rv32i) ..."
 make -C sw/firmware clean >/dev/null
-make -C sw/firmware RISCV_TC="$TC" \
+make -C sw/firmware RISCV_TC="$TC" EFPGA_STREAM="$EFPGA_STREAM" \
     MOSAIC_GENERATED_ROOT="$MOSAIC_GENERATED_ROOT" > "$HERE/fw-build.log" 2>&1 \
     || { echo "firmware build failed — see $HERE/fw-build.log"; exit 1; }
 echo "    flash image: sw/firmware/build/mosaic_fw.hex"
@@ -85,12 +117,13 @@ echo "### [4/4] running the simulation (production firmware) ..."
 # model. boot_sel=1 prevents tb_loadHEX from touching SRAM; execute_from_flash=1
 # selects the same SPI-memory-mapped path used by silicon straps.
 "$OBJ/Vtb_top" +firmware="$REPO/sw/firmware/build/mosaic_fw.hex" +boot_sel=1 \
-    +execute_from_flash=1 \
+    +execute_from_flash=1 +warm_reboots="$WARM_REBOOTS" \
     +maxcycles=20000000 2>&1 | tee "$HERE/sim-fw.log" | tail -20
 SIM_RC=${PIPESTATUS[0]}
+REBOOTS=$(grep -c '^\[TESTBENCH\].*: warm reboot$' "$HERE/sim-fw.log")
 echo ""
-if [ "$SIM_RC" -eq 0 ] && grep -q "EXIT SUCCESS" "$HERE/sim-fw.log"; then
-  echo "### RESULT: EXIT SUCCESS — production firmware ran on $MOSAIC_CFG ✓"
+if [ "$SIM_RC" -eq 0 ] && grep -q "EXIT SUCCESS" "$HERE/sim-fw.log" && [ "$REBOOTS" -eq "$WARM_REBOOTS" ]; then
+  echo "### RESULT: EXIT SUCCESS — production firmware ran on $MOSAIC_CFG${EFPGA_DESIGN:+ with $(basename "$EFPGA_DESIGN") in its eFPGA}, warm reboots: $REBOOTS ✓"
 else
   echo "### RESULT: simulation failed or no EXIT SUCCESS (see $HERE/sim-fw.log)"
   exit 1

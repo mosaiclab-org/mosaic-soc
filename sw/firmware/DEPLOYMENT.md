@@ -14,6 +14,24 @@ Cold boot uses the existing x-heep silicon path:
    and generated topology fingerprint.
 4. TITAN copies every worker payload to its configured SRAM boot address and
    verifies its CRC32 before configuring or waking the TDU.
+5. On a design with an eFPGA (`soc.efpga`), the last two entries may hold an
+   eFPGA design: its unload stream, then its stream. After a reset that kept
+   power the fabric still holds the design that ran (`TAG` is not 0), and
+   TITAN first writes the unload to the loader's `BITSTREAM` register. It
+   then writes the stream and connects the fabric if the loader reports
+   `configured`. A stream the loader refuses leaves the fabric isolated; the
+   boot goes on, and after the workers ran TITAN exits with the loader's
+   `STATUS`, bit 31 set (docs/efpga.md).
+
+The table (`pack_flash.py`, version 2) is a header of eight words (magic,
+version, header size, entry count, flags, topology CRC, table CRC, TITAN
+offset) and an entry of five words per payload: kind, destination, size,
+flash offset, CRC32. Kind 0 is a worker image, copied to its destination in
+SRAM; kind 1 an eFPGA stream, written word by word to the `BITSTREAM` register
+at its destination; kind 2 that design's unload stream, written the same way
+before it, and only when `TAG` is not 0. The loader takes at most 15 entries,
+and so does the packer. Build with `EFPGA_STREAM=<absolute path>/<design>.hex`
+to pack one; `EFPGA_UNLOAD` defaults to the `<design>.unload.hex` beside it.
 
 `mosaic_flash.json` also records SHA-256 for each binary so a host programmer or
 release pipeline can authenticate the exact deployment artifact. Runtime CRC32

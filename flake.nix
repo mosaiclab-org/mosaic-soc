@@ -4,8 +4,10 @@
 #                            cocotb, kepler-formal, verible  (also `default`)
 #   nix develop .#physical   the LibreLane 3.0.0 shell, identical to
 #                            flow/librelane/flake.nix's
+#   nix develop .#efpga      the eFPGA fabric tools: FABulous 2.2.0, Yosys 0.62,
+#                            nextpnr-generic 0.9 (see docs/efpga.md)
 #
-# Two shells, never one merged shell: LibreLane puts nix-eda's own Verilator
+# Separate shells, never one merged shell: LibreLane puts nix-eda's own Verilator
 # (5.044) on PATH and its lint step calls `verilator` by name. Putting 5.050
 # in the same shell would silently change a tool inside the signoff flow,
 # which the existing Block A/B/C evidence was not produced with.
@@ -143,9 +145,75 @@
               fi
             '';
           };
+
+          # FABulous 2.2.0 and its user flow: Yosys synth_fabulous, nextpnr-generic
+          # --uarch fabulous, bit_gen. Entered on its own or from inside the sim
+          # shell (`nix develop .#efpga --command ...`), where it only adds tools:
+          # no python goes on PATH, so .venv's stays in front. No new flake input:
+          # every binary is from the locked nixpkgs and nix-eda.
+          # util/mosaic_gen/efpga_gen.py checks the three versions before it runs.
+          efpga =
+            let
+              python = pkgs.python312; # FABulous needs >= 3.12; its CI runs 3.12
+              # numpy's manylinux wheel loads libstdc++ and libz from the system.
+              libs = pkgs.lib.makeLibraryPath [
+                pkgs.stdenv.cc.cc.lib
+                pkgs.zlib
+              ];
+            in
+            pkgs.mkShell {
+              packages = [
+                pkgs.uv
+                pkgs.yosys # nix-eda 6.11: Yosys 0.62, the one LibreLane runs
+                pkgs.nextpnr # nixpkgs 25.11: nextpnr-generic 0.9
+              ];
+              UV_PYTHON_DOWNLOADS = "never";
+              # The Python layer is build/efpga_env/venv, synced from the
+              # hash-locked util/efpga-requirements.txt. The stamp names the
+              # interpreter, the lock's hash and the checkout path, so a change
+              # to any of them rebuilds it. It holds a librelane wheel (a
+              # FABulous dependency) that must never meet the signoff flow, so
+              # of the venv only two entry points (FABulous, bit_gen) go on
+              # PATH, through one wrapper that scopes LD_LIBRARY_PATH to them.
+              # The wrapper also drops the PDK variables: with them FABulous
+              # downloads a PDK into $PDK_ROOT (docs/efpga.md). FABulous
+              # imports tkinter at start-up, which nixpkgs builds apart: the
+              # .pth file gives it to this venv.
+              # Nothing is built or put on PATH unless the requirements file is
+              # there, so entering from another directory litters nothing.
+              shellHook = ''
+                unset OBJCOPY OBJDUMP # as in the sim shell: this shell re-exports them
+                efpga_req="$PWD/util/efpga-requirements.txt"
+                efpga_dir="$PWD/build/efpga_env"
+                if [ ! -f "$efpga_req" ]; then
+                  echo "efpga: no $efpga_req: enter this shell from the repository root" >&2
+                else
+                  efpga_want="${python} $(sha256sum "$efpga_req")"
+                  if [ "$(cat "$efpga_dir/venv/.lock-sha256" 2>/dev/null)" != "$efpga_want" ]; then
+                    echo "efpga: building $efpga_dir/venv from $efpga_req" >&2
+                    rm -rf "$efpga_dir/bin"
+                    mkdir -p "$efpga_dir" &&
+                      uv venv --quiet --clear --python ${python.interpreter} "$efpga_dir/venv" &&
+                      uv pip sync --quiet --no-build --python "$efpga_dir/venv/bin/python" --require-hashes "$efpga_req" &&
+                      echo "${python.pkgs.tkinter}/${python.sitePackages}" \
+                        > "$efpga_dir/venv/${python.sitePackages}/nix-tkinter.pth" &&
+                      echo "$efpga_want" > "$efpga_dir/venv/.lock-sha256" ||
+                      echo "efpga: the venv was NOT built; FABulous is not available" >&2
+                  fi
+                  if [ "$(cat "$efpga_dir/venv/.lock-sha256" 2>/dev/null)" = "$efpga_want" ]; then
+                    mkdir -p "$efpga_dir/bin"
+                    printf '#!/bin/sh\nunset PDK_ROOT PDK PDKPATH FAB_PDK FAB_PDK_ROOT\nLD_LIBRARY_PATH=%s PYTHONPATH= exec "%s/$(basename "$0")" "$@"\n' \
+                      "${libs}" "$efpga_dir/venv/bin" > "$efpga_dir/bin/FABulous"
+                    chmod +x "$efpga_dir/bin/FABulous"
+                    ln -sf FABulous "$efpga_dir/bin/bit_gen"
+                    export PATH="$efpga_dir/bin:$PATH"
+                  fi
+                fi
+              '';
+            };
         in
         {
-          inherit sim;
+          inherit sim efpga;
           default = sim;
 
           physical = pkgs.librelane-shell.override {

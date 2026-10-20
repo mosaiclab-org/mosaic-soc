@@ -22,7 +22,9 @@ other Verilator version, so a system Verilator is not a substitute.
 container runtime.
 
 The physical flow has its own shell, `nix develop .#physical`, and is needed
-only for hardening ([docs/physical-flow.md](docs/physical-flow.md)).
+only for hardening ([docs/physical-flow.md](docs/physical-flow.md)). The eFPGA
+tools have theirs, `nix develop .#efpga`, which the eFPGA runners enter by
+themselves ([docs/efpga.md](docs/efpga.md)).
 
 ## Running the checks
 

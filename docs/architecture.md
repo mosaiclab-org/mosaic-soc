@@ -86,9 +86,10 @@ ports.
 |---|---|---|
 | RAM banks | `0x0000_0000` | `memory.sram_kb`, or absent when it is 0 |
 | Debug module | `0x1000_0000` | optional (`soc.debug`) |
-| Always-on peripherals | `0x2000_0000` | includes the TDU at `0x200A_0000` and the CLINT at `0x200B_0000` |
+| Always-on peripherals | `0x2000_0000` | includes the TDU at `0x200A_0000`, the CLINT at `0x200B_0000` and, with `soc.efpga`, the eFPGA's registers at `0x200C_0000` |
 | User peripherals | `0x3000_0000` | |
 | Flash window | `0x4000_0000`, 16 MB | memory-mapped SPI flash, used for execute in place (XIP) |
+| eFPGA window | `0x5000_0000`, 4 KB | with `soc.efpga` only: the user design in the fabric ([efpga.md](efpga.md)) |
 | External slaves | `0xF000_0000`, 16 MB | off-chip RAM for `memory.external` |
 
 Three memory profiles exist:
@@ -224,6 +225,7 @@ configurations in `configs/*.hjson`. It renders the templates in place.
 | `hw/mosaic_soc/` | the SoC templates: top level, CPU subsystem, bus, memory, peripherals |
 | `hw/sci/` | the SCI wrappers |
 | `hw/tdu/` | the TDU and the CLINT |
+| `hw/efpga/` | the wrapper of an eFPGA fabric, which `soc.efpga` puts in `mosaic_soc` ([efpga.md](efpga.md)) |
 | `hw/vendor/mosaic/` | vendored cores, iDMA, FlooNoC and the bus bridges |
 | `hw/vendor/` (other) | upstream X-HEEP, OpenHW, pulp-platform and OpenTitan IP |
 | `hw/asic/` | technology-specific cells (clock gate, pads, SRAM wrapper) |

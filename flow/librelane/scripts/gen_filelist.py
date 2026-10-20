@@ -149,6 +149,9 @@ def collect(repo: pathlib.Path, manifest_path: pathlib.Path,
             build_root: pathlib.Path, wrapper: str = DEFAULT_WRAPPER,
             pdk: str = DEFAULT_PDK) -> tuple[list[str], list[str]]:
     manifest = json.loads(manifest_path.read_text())
+    if "mosaic_efpga" in manifest["build"].get("flags", []):
+        raise SystemExit("the design has an eFPGA (soc.efpga), which the physical flow "
+                         "does not take yet (docs/roadmap.md)")
     vc = find_vc(build_root)
     work = vc.parent
 

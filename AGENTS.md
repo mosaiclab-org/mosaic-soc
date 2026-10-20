@@ -45,6 +45,15 @@ flow and current status.
    evidence.
 9. **Report what you ran.** State the command and its real result. Do not claim
    a simulation or hardening result you did not observe.
+10. **Never run the `FABulous` command directly.** It can download a PDK: into
+    `~/.ciel` through the efpga shell's command, which unsets `PDK_ROOT`, and
+    into `$PDK_ROOT` if the environment's own entry point is called. Generate
+    an eFPGA fabric only through `util/mosaic_gen/efpga_gen.py` or its
+    callers: `mcu_gen.py` (`make mosaic-gen` on a configuration with
+    `soc.efpga`), `tb/efpga/run.sh`, `tb/efpga/run_wrapper.sh`,
+    `tb/mosaic_soc/run_efpga.sh` and `tb/mosaic_soc/run_fw.sh` with
+    `EFPGA_DESIGN`. It removes the PDK variables and gives the tools their own
+    `HOME` ([docs/efpga.md](docs/efpga.md)).
 
 ## The three things a new core needs
 
@@ -65,14 +74,15 @@ is not integrated until `./mosaic tb-smith run <core>` prints `TB PASS` and
 
 | Path | Contents |
 |---|---|
-| `mosaic.yaml`, `configs/` | configurations |
-| `util/mosaic_gen/` | the generator. `core_registry.py` is the single source of supported cores, buses, PDKs and configuration rules |
+| `mosaic.yaml`, `configs/` | configurations; `configs/efpga/` holds the eFPGA fabric presets |
+| `util/mosaic_gen/` | the generator. `core_registry.py` is the single source of supported cores, buses, PDKs and configuration rules. `efpga_gen.py` generates an eFPGA fabric and its bitstreams, and the fabric of `soc.efpga` into a bundle |
 | `hw/mosaic_soc/*.sv.tpl` | SoC templates |
 | `hw/sci/` | core wrappers |
 | `hw/tdu/` | Task Dispatch Unit and CLINT |
+| `hw/efpga/` | the wrapper that makes an eFPGA fabric a bus peripheral; `soc.efpga` puts it in `mosaic_soc` |
 | `hw/vendor/mosaic/` | vendored cores, iDMA, FlooNoC, bus bridges |
 | `sw/` | device libraries and firmware |
-| `tb/` | testbenches; `tb/mosaic_soc/` is the full-SoC bench |
+| `tb/` | testbenches; `tb/mosaic_soc/` is the full-SoC bench, `tb/efpga/` holds the benches of the eFPGA fabric and of its wrapper |
 | `flow/librelane/` | the physical flow, the signoff template and the waivers |
 | `harness/` | the `mosaic` command-line tool and its gates |
 | `.claude/skills/` | one card per `mosaic` skill: when to use it, the command, the failure playbook |
@@ -87,6 +97,7 @@ Environment (see [docs/reproducing.md](docs/reproducing.md)):
 ```bash
 make venv              # Python environment in .venv/
 nix develop .#sim      # Verilator 5.050, RISC-V GCC, Icarus, cocotb
+nix develop .#efpga    # FABulous 2.2.0, Yosys 0.62, nextpnr 0.9; the eFPGA runners enter it themselves
 ./mosaic doctor        # verify the tools against the pins
 ```
 

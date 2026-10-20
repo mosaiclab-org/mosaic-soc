@@ -350,6 +350,29 @@ def main():
         f"{Colors.GREEN}[MCU-GEN]{Colors.RESET} X-HEEP configuration generated successfully"
     )
 
+    # MOSAIC eFPGA step: with soc.efpga the bundle carries the fabric of its
+    # preset, and the templates need its geometry.
+    efpga = kwargs["xheep"].get_extension("efpga") if args.mosaic_config else None
+    if efpga:
+        if not isolated:
+            parser.error("soc.efpga needs the isolated MOSAIC output, not --legacy-in-place")
+        import efpga_gen
+
+        efpga_out = generated_root / "efpga"
+        geometry = efpga_gen.soc_fabric(efpga["preset"], efpga_out)["geometry"]
+        kwargs["xheep"].add_extension("efpga", {**efpga, **geometry})
+        sources = (efpga_out / "fabric.f").read_text().split()
+        for output in [efpga_out / "soc.f", efpga_out / "efpga_inst.vh",
+                       efpga_out / "manifest.json", *map(pathlib.Path, sources)]:
+            generated_records.append(
+                {
+                    "logical_path": str(output.relative_to(generated_root)),
+                    "path": str(output.resolve()),
+                    "generator": "efpga_gen",
+                }
+            )
+        print(f"{Colors.GREEN}[MCU-GEN]{Colors.RESET} eFPGA fabric {efpga['preset']} ready")
+
     def output_for_template(tpl_path):
         tpl_path = pathlib.Path(tpl_path).resolve()
         if not isolated:

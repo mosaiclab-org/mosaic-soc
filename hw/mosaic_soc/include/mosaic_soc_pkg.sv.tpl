@@ -22,6 +22,7 @@
   is_mc = xheep.is_multi_core()
   nh = xheep.num_harts()
   tdu_enabled = is_mc and bool(xheep.get_extension("tdu_enabled"))
+  efpga = xheep.get_extension("efpga")
 %>
 
 package mosaic_soc_pkg;
@@ -91,7 +92,7 @@ package mosaic_soc_pkg;
   //must be power of two
   localparam int unsigned MEM_SIZE = 32'h${f'{memory_ss.ram_size_address():08X}'};
 
-  localparam SYSTEM_XBAR_NSLAVE = ${memory_ss.ram_numbanks() + 5};
+  localparam SYSTEM_XBAR_NSLAVE = ${memory_ss.ram_numbanks() + (6 if efpga else 5)};
 
   localparam int unsigned LOG_SYSTEM_XBAR_NMASTER = SYSTEM_XBAR_NMASTER > 1 ? $clog2(SYSTEM_XBAR_NMASTER) : 32'd1;
   localparam int unsigned LOG_SYSTEM_XBAR_NSLAVE = SYSTEM_XBAR_NSLAVE > 1 ? $clog2(SYSTEM_XBAR_NSLAVE) : 32'd1;
@@ -155,6 +156,15 @@ package mosaic_soc_pkg;
   localparam logic[31:0] FLASH_MEM_SIZE = 32'h${flash_mem_size_address};
   localparam logic[31:0] FLASH_MEM_END_ADDRESS = FLASH_MEM_START_ADDRESS + FLASH_MEM_SIZE;
   localparam logic[31:0] FLASH_MEM_IDX = 32'd${memory_ss.ram_numbanks() + 4};
+% if efpga:
+
+  // The user window of the eFPGA (soc.efpga, hw/efpga/mosaic_efpga.sv). Its
+  // registers are the always-on peripheral EFPGA.
+  localparam logic[31:0] EFPGA_WIN_START_ADDRESS = 32'h${f'{efpga["window_base"]:08X}'};
+  localparam logic[31:0] EFPGA_WIN_SIZE = 32'h${f'{efpga["window_size"]:08X}'};
+  localparam logic[31:0] EFPGA_WIN_END_ADDRESS = EFPGA_WIN_START_ADDRESS + EFPGA_WIN_SIZE;
+  localparam logic[31:0] EFPGA_WIN_IDX = 32'd${memory_ss.ram_numbanks() + 5};
+% endif
 
   localparam addr_map_rule_t [SYSTEM_XBAR_NSLAVE-1:0] XBAR_ADDR_RULES = '{
       '{ idx: ERROR_IDX, start_addr: ERROR_START_ADDRESS, end_addr: ERROR_END_ADDRESS },
@@ -164,7 +174,10 @@ package mosaic_soc_pkg;
       '{ idx: DEBUG_IDX, start_addr: DEBUG_START_ADDRESS, end_addr: DEBUG_END_ADDRESS },
       '{ idx: AO_PERIPHERAL_IDX, start_addr: AO_PERIPHERAL_START_ADDRESS, end_addr: AO_PERIPHERAL_END_ADDRESS },
       '{ idx: PERIPHERAL_IDX, start_addr: PERIPHERAL_START_ADDRESS, end_addr: PERIPHERAL_END_ADDRESS },
-      '{ idx: FLASH_MEM_IDX, start_addr: FLASH_MEM_START_ADDRESS, end_addr: FLASH_MEM_END_ADDRESS }
+      '{ idx: FLASH_MEM_IDX, start_addr: FLASH_MEM_START_ADDRESS, end_addr: FLASH_MEM_END_ADDRESS }${"," if efpga else ""}
+% if efpga:
+      '{ idx: EFPGA_WIN_IDX, start_addr: EFPGA_WIN_START_ADDRESS, end_addr: EFPGA_WIN_END_ADDRESS }
+% endif
   };
 
 % if xheep.bus_type().value in ("LOG", "FLOONOC"):
