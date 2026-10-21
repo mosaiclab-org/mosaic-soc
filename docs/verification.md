@@ -72,9 +72,9 @@ Python suite and gate-level simulation.
 
 `scripts/run_sweep.sh` runs every suite in sequence: the Python suite, the
 `tb-matrix` validation tier, the subsystem benches, the wrapper benches, the
-eight eFPGA steps, the wake demonstration on each fabric and for each wrapped
+nine eFPGA steps, the wake demonstration on each fabric and for each wrapped
 core, the multiprocessor demonstration on each fabric, the firmware run, and
-the Block A checks including gate-level simulation. It has 41 steps. Each step
+the Block A checks including gate-level simulation. It has 42 steps. Each step
 has a success marker that must appear in its log, and the script exits
 non-zero if any step fails.
 
@@ -84,10 +84,12 @@ scripts/run_sweep.sh --only wake     # steps whose name matches
 scripts/run_sweep.sh                 # everything; logs under build/sweep/
 ```
 
-The gate-level step needs a hardened run and a PDK clone on disk; see below.
-The four `efpga_*` steps enter `nix develop .#efpga` by themselves, and the
-first entry downloads its Python environment from PyPI
-([reproducing.md](reproducing.md#the-efpga-shell)).
+The gate-level step and `efpga_synth` need the GF180MCU PDK clone on disk
+(`make -C flow/librelane clone-pdk`), the gate-level step also a hardened run;
+see below. The `efpga_*` steps enter `nix develop .#efpga` by themselves, and
+the first entry downloads its Python environment from PyPI
+([reproducing.md](reproducing.md#the-efpga-shell)); `efpga_synth` also enters
+`nix develop .#physical`.
 
 ## tb-matrix: coverage of the design space
 

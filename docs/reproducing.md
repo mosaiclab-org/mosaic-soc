@@ -69,8 +69,9 @@ and nextpnr come from Nix. Do not activate the environment. Entered from
 inside the sim shell it adds no Verilator, so Verilator stays 5.050.
 
 The eFPGA runners (`tb/efpga/run.sh`, `tb/efpga/run_wrapper.sh`,
-`tb/mosaic_soc/run_efpga.sh`, and `tb/mosaic_soc/run_fw.sh` with
-`EFPGA_DESIGN`) enter this shell by themselves. `util/mosaic_gen/efpga_gen.py`
+`tb/mosaic_soc/run_efpga.sh`, `tb/mosaic_soc/run_fw.sh` with
+`EFPGA_DESIGN`, and the synthesis, `flow/librelane/scripts/efpga_synth.sh`)
+enter this shell by themselves. `util/mosaic_gen/efpga_gen.py`
 checks the three versions before it runs anything and refuses others;
 `mosaic doctor` does not check them. [efpga.md](efpga.md) describes what the
 tools produce.

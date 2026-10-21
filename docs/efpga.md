@@ -23,11 +23,13 @@ firmware loads it, unloads it and loads it again. The configuration key
 | The driver, and the load at cold boot | `sw/firmware/common/efpga.h`; `cold_boot.c` and `util/mosaic_gen/pack_flash.py --efpga` |
 | The shell, and the command from a user's Verilog to a simulation | `efpga_gen.py --shell`; `EFPGA_DESIGN=<design>.v tb/mosaic_soc/run_fw.sh` |
 | The firmware and the runner of the SoC test | `tb/mosaic_soc/prog_efpga/`, `tb/mosaic_soc/run_efpga.sh` |
-| The regression steps | `efpga_fabric`, `efpga_wrapper`, `efpga_soc`, `efpga_design`, `efpga_log`, `efpga_floonoc`, `efpga_serv` in `scripts/run_sweep.sh` |
+| The synthesis for GF180MCU | `flow/librelane/scripts/efpga_synth.sh`, `gf180_latch_map.v` |
+| The regression steps | `efpga_fabric`, `efpga_wrapper`, `efpga_soc`, `efpga_design`, `efpga_log`, `efpga_floonoc`, `efpga_serv`, `efpga_medium`, `efpga_synth` in `scripts/run_sweep.sh` |
 
 What does not exist: a layout. The wake demonstration with the
-fabric has been simulated on each of the three buses, and the wrapper was
-never synthesised. A design is replaced through its unload stream; `clear` does not
+fabric has been simulated on each of the three buses, and the wrapper and the
+fabric of `small` have been synthesised for GF180MCU, not placed
+([Synthesis](#synthesis)). A design is replaced through its unload stream; `clear` does not
 remove a design that has run safely, and a reset keeps it ([Limits](#limits)).
 
 ## The preset `small`
@@ -701,6 +703,47 @@ again on every run; the fabric in a SoC's bundle is kept while the bundle's
 key stays the same (`soc_fabric`), and `run_fw.sh` compiles a design for it
 without generating one.
 
+## Synthesis
+
+`flow/librelane/scripts/efpga_synth.sh [preset]` synthesises the wrapper and
+the fabric of a preset for GF180MCU's 7-track library, `gf180mcu_fd_sc_mcu7t5v0`,
+at its typical corner and 5 V, with the Yosys (and its `slang` front end) and
+the OpenSTA of `nix develop .#physical`, which it enters by itself. It needs
+the PDK clone (`make -C flow/librelane clone-pdk`) and reads only its
+library, never `PDK_ROOT`. It runs twice:
+
+1. The wrapper and the fabric, flattened. Every cell must be a library cell:
+   the fabric's configuration latches go to `latq_1` through
+   `flow/librelane/scripts/gf180_latch_map.v`, since Yosys maps no latch by
+   itself, and Yosys's `check` on the mapped netlist must report no problem.
+2. The wrapper alone, the fabric a black box, then OpenSTA at a clock of
+   `EFPGA_SYNTH_PERIOD` ns (default 50, 20 MHz), with every input and output
+   timed against the clock edge: no path may have negative slack.
+
+It prints `SYNTH PASS` with the numbers, or `SYNTH FAIL` and the reason; the
+sweep step `efpga_synth` runs it on `small`. Reports and logs are in
+`build/efpga_synth/<preset>/`. The fabric's switch matrices hold structural
+loops that only a configuration breaks, so Yosys's check before mapping
+reports thousands of them, over a gigabyte of log for `small`; the script turns
+that one warning into a message and decides on the check after mapping, which
+does not look inside library cells.
+
+Measured on 2026-10-21 on `small`:
+
+| | |
+|---|---|
+| Wrapper and fabric | 19,930 cells, 681,970 µm² of standard cells |
+| Of which configuration latches | 6,442 `latq_1`, 282,830 µm² |
+| The wrapper alone | 83,663 µm² |
+| Worst path of the wrapper | 26.15 ns, from the loader's state through the CRC-32 update into the CRC register: slack +23.56 ns at 50 ns, about 38 MHz |
+
+The area is that of the cells, before placement: a layout adds the space
+between them, filler and the power grid. The timing is before layout: ideal
+clocks and no wires, one corner, and nothing through the fabric, whose paths
+depend on the design loaded. The clock gate of the wrapper is GF180MCU's
+`icgtp_1` (`hw/asic/gf180/tc_clk.sv`), not the behavioural model the benches
+simulate. `medium` was not synthesised. The sweep step took 154 s.
+
 ## Tools
 
 | Tool | Version | Source |
@@ -709,6 +752,7 @@ without generating one.
 | Yosys | 0.62 | nix-eda, the revision in `flake.lock` |
 | nextpnr-generic | 0.9 | nixpkgs, the revision in `flake.lock` |
 | `bit_gen` | FABulous-bit-gen 0.3.1 | the same requirements file |
+| Yosys with `slang`, OpenSTA | 0.62, 2.7.0 | `nix develop .#physical`, for the [synthesis](#synthesis) only |
 
 [reproducing.md](reproducing.md) describes the shell.
 
@@ -778,9 +822,8 @@ without generating one.
   enable of those it does not use, as `counter8_en` does.
 - **What the wrapper is not.** It has one OBI slave port, a slave of the
   system crossbar like the SoC's other slaves. It cannot master the bus and
-  raises no interrupt. It was never synthesised: there is no
-  area, no timing and no layout, and its clock gate is the generic cell
-  model.
+  raises no interrupt. It has been synthesised, not laid out: its area and
+  timing are those of the cells before placement ([Synthesis](#synthesis)).
 - **What the wrapper's tests do not check.** One fabric, three designs, two
   cores: the load is run by a cv32e20, from SRAM by the test firmware and
   from flash by the production firmware, and by SERV from flash. Only `shell_regs`, the
