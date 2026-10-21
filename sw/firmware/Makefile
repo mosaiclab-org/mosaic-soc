@@ -127,6 +127,20 @@ ELF         = $(TITAN_ELF)
 DEMO_ELF    = $(DEMO_TITAN_ELF)
 endif
 
+# EFPGA_STREAM: the stream of an eFPGA design (<design>.hex of
+# util/mosaic_gen/efpga_gen.py), packed for TITAN to load before it wakes the
+# workers, with EFPGA_UNLOAD, its unload stream, for a design a reset kept in
+# the fabric. Only on a design with soc.efpga. Absolute paths: make -C changes
+# directory. EFPGA_TEST: a C file with `uint32_t efpga_test(void)`, the
+# user's check of that design. TITAN calls it once the workers ran; a value
+# other than 0 ends the run with 0x40000000 | that value.
+EFPGA_UNLOAD ?= $(if $(EFPGA_STREAM),$(EFPGA_STREAM:.hex=.unload.hex))
+EFPGA_STAMP = $(BUILD)/efpga_streams
+ifneq ($(strip $(EFPGA_TEST)),)
+TITAN_OBJ += $(BUILD)/efpga_test.o
+override MOSAIC_FIRMWARE_CPPFLAGS += -DMOSAIC_EFPGA_TEST  # also when set on the command line
+endif
+
 # ── Targets ─────────────────────────────────────────────────────────
 .PHONY: all demo clean disasm size
 
@@ -164,7 +178,11 @@ $(BUILD)/cold_boot.o: $(ROOT)/sw/firmware/common/cold_boot.c | $(BUILD)
 	@echo "  CC    $<"
 	$(CC) $(CFLAGS) $(MOSAIC_XIP_CPPFLAGS) $(MOSAIC_FIRMWARE_CPPFLAGS) $(TITAN_ARCH) -I$(ROOT)/sw/firmware/common -c $< -o $@
 
-$(BUILD)/titan_main.o: $(ROOT)/sw/firmware/titan/titan_main.c | $(BUILD)
+$(BUILD)/efpga_test.o: $(EFPGA_TEST) $(EFPGA_STAMP) | $(BUILD)
+	@echo "  CC    $<"
+	$(CC) $(CFLAGS) $(TITAN_ARCH) -I$(ROOT)/sw/firmware/common -c $< -o $@
+
+$(BUILD)/titan_main.o: $(ROOT)/sw/firmware/titan/titan_main.c $(EFPGA_STAMP) | $(BUILD)
 	@echo "  CC    $<"
 	$(CC) $(CFLAGS) $(MOSAIC_XIP_CPPFLAGS) $(MOSAIC_FIRMWARE_CPPFLAGS) $(TITAN_ARCH) -I$(ROOT)/sw/firmware/common -c $< -o $@
 
@@ -231,15 +249,10 @@ $(ATLAS_BIN): $(ATLAS_ELF)
 $(NANO_BIN): $(NANO_ELF)
 	$(OBJCOPY) -O binary $< $@
 
-# EFPGA_STREAM: the stream of an eFPGA design (<design>.hex of
-# util/mosaic_gen/efpga_gen.py), packed for TITAN to load before it wakes the
-# workers, with EFPGA_UNLOAD, its unload stream, for a design a reset kept in
-# the fabric. Only on a design with soc.efpga. Absolute paths: make -C changes
-# directory. The stamp records them, so that changing them packs again.
-EFPGA_UNLOAD ?= $(if $(EFPGA_STREAM),$(EFPGA_STREAM:.hex=.unload.hex))
-EFPGA_STAMP = $(BUILD)/efpga_streams
+# The stamp records the eFPGA files (above), so that changing them builds again.
 $(EFPGA_STAMP): FORCE | $(BUILD)
-	@echo '$(EFPGA_STREAM) $(EFPGA_UNLOAD)' | cmp -s - $@ || echo '$(EFPGA_STREAM) $(EFPGA_UNLOAD)' > $@
+	@echo '$(EFPGA_STREAM) $(EFPGA_UNLOAD) $(EFPGA_TEST)' | cmp -s - $@ \
+	    || echo '$(EFPGA_STREAM) $(EFPGA_UNLOAD) $(EFPGA_TEST)' > $@
 FORCE:
 
 $(FLASH_BIN): $(TITAN_BIN) $(ATLAS_BIN) $(NANO_BIN) $(MOSAIC_GENERATED_ROOT)/sw/boot_images.json \

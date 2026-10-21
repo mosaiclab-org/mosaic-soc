@@ -24,6 +24,9 @@
 #   boot_bad_crc  the stream of `regs` with a wrong CRC word: the loader must
 #                 refuse it, the workers still run, and the exit value is the
 #                 STATUS of the refusal with bit 31 set
+#   boot_test     `regs`, with the user's check tb/efpga/bus_regs_test.c, which
+#                 returns 7 when it reads R0's reset value: the exit value
+#                 must be 0x40000007 (stops after the cold boot)
 # The sweep step efpga_design boots it with a design the loader takes
 # (tb/mosaic_soc/run_fw.sh with EFPGA_DESIGN).
 #
@@ -31,7 +34,7 @@
 # fifth and the ninth; the wrapper's own bench (tb/efpga/run_wrapper.sh) has
 # the others.
 #
-# Pass criterion: "### RESULT: EXIT SUCCESS", printed once, after the six
+# Pass criterion: "### RESULT: EXIT SUCCESS", printed once, after the seven
 # runs ended as expected. Usage: tb/mosaic_soc/run_efpga.sh   (inside
 # `nix develop .#sim`). MOSAIC_CFG must be a design with `soc.efpga: {preset:
 # small}` and an SRAM pool whose hart 0 runs free; the default is the wake
@@ -131,6 +134,10 @@ make -C sw/firmware RISCV_TC="$TC" MOSAIC_GENERATED_ROOT="$(dirname "$MOSAIC_SW"
     BUILD="$FW_DIR/boot_bad_crc" EFPGA_STREAM="$FW_DIR/bus_regs_bad_crc.hex" \
     EFPGA_UNLOAD="$OUT/bitstream/bus_regs.unload.hex" \
     > "$FW_DIR/boot_bad_crc.log" 2>&1 || fail "boot_bad_crc: firmware build, see $FW_DIR/boot_bad_crc.log"
+make -C sw/firmware RISCV_TC="$TC" MOSAIC_GENERATED_ROOT="$(dirname "$MOSAIC_SW")" \
+    BUILD="$FW_DIR/boot_test" EFPGA_STREAM="$OUT/bitstream/bus_regs.hex" \
+    EFPGA_TEST="$REPO/tb/efpga/bus_regs_test.c" MOSAIC_FIRMWARE_CPPFLAGS=-DMOSAIC_COLD_BOOT_SMOKE \
+    > "$FW_DIR/boot_test.log" 2>&1 || fail "boot_test: firmware build, see $FW_DIR/boot_test.log"
 
 echo "### [4/6] building the full-SoC Verilator model ..."
 rm -rf "$OBJ"
@@ -166,14 +173,19 @@ bad_unload 9
 EOF
 echo "### [6/6] booting the production firmware from flash ..."
 # A cold boot: the testbench writes only the flash model (sw/firmware/DEPLOYMENT.md).
-# The exit value: STATUS = error | CAUSE_CRC (3) << 8, with bit 31 set.
-want=$(( 0x80000000 | 0x4 | 3 << 8 ))
-rc=0
-"$OBJ/Vtb_top" +firmware="$FW_DIR/boot_bad_crc/mosaic_fw.hex" +boot_sel=1 +execute_from_flash=1 \
-    +maxcycles=20000000 < /dev/null > "$HERE/sim-efpga-boot_bad_crc.log" 2>&1 || rc=$?
-RUNS=$((RUNS + 1))
-[ $rc -ne 0 ] && grep -Eq "EXIT FAILURE: +$want\$" "$HERE/sim-efpga-boot_bad_crc.log" \
-    || fail "boot_bad_crc: not the exit value $want, see $HERE/sim-efpga-boot_bad_crc.log"
-echo "ok     boot_bad_crc: exit value $want"
-[ $RUNS -eq 6 ] || fail "$RUNS of 6 runs were made"
-echo "### RESULT: EXIT SUCCESS: hart 0 loaded, used, unloaded and reloaded the fabric, and booted past a refused stream (6 runs)"
+# boot_bad_crc: STATUS = error | CAUSE_CRC (3) << 8, with bit 31 set.
+# boot_test: 0x40000000 | the 7 the user's check returns.
+while read -r name want; do
+  rc=0
+  "$OBJ/Vtb_top" +firmware="$FW_DIR/$name/mosaic_fw.hex" +boot_sel=1 +execute_from_flash=1 \
+      +maxcycles=20000000 < /dev/null > "$HERE/sim-efpga-$name.log" 2>&1 || rc=$?
+  RUNS=$((RUNS + 1))
+  [ $rc -ne 0 ] && grep -Eq "EXIT FAILURE: +$want\$" "$HERE/sim-efpga-$name.log" \
+      || fail "$name: not the exit value $want, see $HERE/sim-efpga-$name.log"
+  echo "ok     $name: exit value $want"
+done <<EOF
+boot_bad_crc $(( 0x80000000 | 0x4 | 3 << 8 ))
+boot_test    $(( 0x40000000 | 7 ))
+EOF
+[ $RUNS -eq 7 ] || fail "$RUNS of 7 runs were made"
+echo "### RESULT: EXIT SUCCESS: hart 0 loaded, used, unloaded and reloaded the fabric, and booted past a refused stream and into the user's check (7 runs)"

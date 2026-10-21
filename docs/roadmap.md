@@ -56,11 +56,9 @@ production firmware loads it from flash before it wakes the workers. What
 follows does not exist. Each phase but the last ends as a step of the
 regression sweep.
 
-- **The complete peripheral.** The load by a SERV orchestrator, a second
-  preset, the key on the LOG and FlooNoC buses, synthesis of
-  the wrapper, the user's own firmware in the one command, and the pads
-  brought out of the SoC behind a mask, so that a pad a design does not bind
-  stays released.
+- **The complete peripheral.** A second preset, synthesis of the wrapper, and
+  the pads brought out of the SoC behind a mask, so that a pad a design does
+  not bind stays released.
 - **Beside the cores.** The TDU dispatches a task to the fabric as it does to
   a worker hart.
 - **Silicon.** A signoff-clean design that contains a fabric.

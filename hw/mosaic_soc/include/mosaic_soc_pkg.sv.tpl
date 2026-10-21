@@ -192,18 +192,24 @@ package mosaic_soc_pkg;
   };
 
   // Non-memory tier: tier-local slave indices (default decode -> ERROR)
-  localparam int unsigned NONMEM_TIER_NSLAVE = 5;
+  localparam int unsigned NONMEM_TIER_NSLAVE = ${6 if efpga else 5};
   localparam logic [31:0] NONMEM_ERROR_IDX = 32'd0;
   localparam logic [31:0] NONMEM_DEBUG_IDX = 32'd1;
   localparam logic [31:0] NONMEM_AO_PERIPHERAL_IDX = 32'd2;
   localparam logic [31:0] NONMEM_PERIPHERAL_IDX = 32'd3;
   localparam logic [31:0] NONMEM_FLASH_MEM_IDX = 32'd4;
+% if efpga:
+  localparam logic [31:0] NONMEM_EFPGA_WIN_IDX = 32'd5;
+% endif
   localparam addr_map_rule_t [NONMEM_TIER_NSLAVE-1:0] NONMEM_TIER_RULES = '{
       '{ idx: NONMEM_ERROR_IDX, start_addr: ERROR_START_ADDRESS, end_addr: ERROR_END_ADDRESS },
       '{ idx: NONMEM_DEBUG_IDX, start_addr: DEBUG_START_ADDRESS, end_addr: DEBUG_END_ADDRESS },
       '{ idx: NONMEM_AO_PERIPHERAL_IDX, start_addr: AO_PERIPHERAL_START_ADDRESS, end_addr: AO_PERIPHERAL_END_ADDRESS },
       '{ idx: NONMEM_PERIPHERAL_IDX, start_addr: PERIPHERAL_START_ADDRESS, end_addr: PERIPHERAL_END_ADDRESS },
-      '{ idx: NONMEM_FLASH_MEM_IDX, start_addr: FLASH_MEM_START_ADDRESS, end_addr: FLASH_MEM_END_ADDRESS }
+      '{ idx: NONMEM_FLASH_MEM_IDX, start_addr: FLASH_MEM_START_ADDRESS, end_addr: FLASH_MEM_END_ADDRESS }${"," if efpga else ""}
+% if efpga:
+      '{ idx: NONMEM_EFPGA_WIN_IDX, start_addr: EFPGA_WIN_START_ADDRESS, end_addr: EFPGA_WIN_END_ADDRESS }
+% endif
   };
 
 % endif

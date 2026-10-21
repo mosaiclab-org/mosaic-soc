@@ -886,12 +886,6 @@ def validate_soc_config(cfg: Any, allow_sim_only: bool = True) -> List[str]:
                 errors.append(
                     f"soc.efpga.preset {preset!r} not in {sorted(VALID_EFPGA_PRESETS)}"
                 )
-        # Only the OBI crossbar has the slave of the user window; the LOG and
-        # FlooNoC fabrics list their non-memory slaves separately.
-        if soc.get("bus", "obi") != "obi":
-            errors.append(
-                f"soc.efpga needs bus 'obi'; {soc.get('bus')!r} has no eFPGA slave"
-            )
 
     spi_mode = soc.get("spi_mode", "full")
     if spi_mode not in VALID_SPI_MODE:

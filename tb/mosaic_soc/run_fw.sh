@@ -31,6 +31,10 @@
 # here) and packed into the flash image, and TITAN loads it at cold boot
 # before it wakes the workers: EXIT SUCCESS then also means the design was
 # configured. A design the loader refuses ends the run with its STATUS.
+# EFPGA_TEST=<test>.c, with EFPGA_DESIGN: the user's check of that design, a C
+# function `uint32_t efpga_test(void)` that TITAN calls once the workers ran
+# (sw/firmware/Makefile). 0 passes; any other value ends the run with
+# 0x40000000 | that value.
 # WARM_REBOOTS=<n>: reset the SoC after each of the first n successful boots
 # (tb/tb_top.sv +warm_reboots), with the flash and an eFPGA's latches kept.
 set -uo pipefail
@@ -40,6 +44,11 @@ if [ -n "${EFPGA_DESIGN:-}" ]; then  # relative to the caller
   EFPGA_DESIGN="$(realpath -e "$EFPGA_DESIGN")" || { echo "EFPGA_DESIGN: no such file"; exit 1; }
 fi
 EFPGA_DESIGN="${EFPGA_DESIGN:-}"
+if [ -n "${EFPGA_TEST:-}" ]; then
+  [ -n "$EFPGA_DESIGN" ] || { echo "EFPGA_TEST checks the design of EFPGA_DESIGN"; exit 1; }
+  EFPGA_TEST="$(realpath -e "$EFPGA_TEST")" || { echo "EFPGA_TEST: no such file"; exit 1; }
+fi
+EFPGA_TEST="${EFPGA_TEST:-}"
 WARM_REBOOTS="${WARM_REBOOTS:-0}"
 cd "$REPO"
 source "$REPO/tb/tools.sh"
@@ -94,7 +103,7 @@ fi
 
 echo "### [2/4] building the production firmware (sw/firmware, rv32i) ..."
 make -C sw/firmware clean >/dev/null
-make -C sw/firmware RISCV_TC="$TC" EFPGA_STREAM="$EFPGA_STREAM" \
+make -C sw/firmware RISCV_TC="$TC" EFPGA_STREAM="$EFPGA_STREAM" EFPGA_TEST="$EFPGA_TEST" \
     MOSAIC_GENERATED_ROOT="$MOSAIC_GENERATED_ROOT" > "$HERE/fw-build.log" 2>&1 \
     || { echo "firmware build failed — see $HERE/fw-build.log"; exit 1; }
 echo "    flash image: sw/firmware/build/mosaic_fw.hex"
@@ -123,7 +132,7 @@ SIM_RC=${PIPESTATUS[0]}
 REBOOTS=$(grep -c '^\[TESTBENCH\].*: warm reboot$' "$HERE/sim-fw.log")
 echo ""
 if [ "$SIM_RC" -eq 0 ] && grep -q "EXIT SUCCESS" "$HERE/sim-fw.log" && [ "$REBOOTS" -eq "$WARM_REBOOTS" ]; then
-  echo "### RESULT: EXIT SUCCESS — production firmware ran on $MOSAIC_CFG${EFPGA_DESIGN:+ with $(basename "$EFPGA_DESIGN") in its eFPGA}, warm reboots: $REBOOTS ✓"
+  echo "### RESULT: EXIT SUCCESS — production firmware ran on $MOSAIC_CFG${EFPGA_DESIGN:+ with $(basename "$EFPGA_DESIGN") in its eFPGA}${EFPGA_TEST:+, checked by $(basename "$EFPGA_TEST")}, warm reboots: $REBOOTS ✓"
 else
   echo "### RESULT: simulation failed or no EXIT SUCCESS (see $HERE/sim-fw.log)"
   exit 1

@@ -23,12 +23,12 @@ firmware loads it, unloads it and loads it again. The configuration key
 | The driver, and the load at cold boot | `sw/firmware/common/efpga.h`; `cold_boot.c` and `util/mosaic_gen/pack_flash.py --efpga` |
 | The shell, and the command from a user's Verilog to a simulation | `efpga_gen.py --shell`; `EFPGA_DESIGN=<design>.v tb/mosaic_soc/run_fw.sh` |
 | The firmware and the runner of the SoC test | `tb/mosaic_soc/prog_efpga/`, `tb/mosaic_soc/run_efpga.sh` |
-| The regression steps | `efpga_fabric`, `efpga_wrapper`, `efpga_soc`, `efpga_design` in `scripts/run_sweep.sh` |
+| The regression steps | `efpga_fabric`, `efpga_wrapper`, `efpga_soc`, `efpga_design`, `efpga_log`, `efpga_floonoc`, `efpga_serv` in `scripts/run_sweep.sh` |
 
-What does not exist: pads of the fabric outside the SoC, a load from a SERV
-orchestrator, a second preset, and a layout. The key takes only the `obi` bus,
-one SoC with the fabric has been simulated, and the wrapper was never
-synthesised. A design is replaced through its unload stream; `clear` does not
+What does not exist: pads of the fabric outside the SoC, a second preset, and
+a layout. The wake demonstration with the
+fabric has been simulated on each of the three buses, and the wrapper was
+never synthesised. A design is replaced through its unload stream; `clear` does not
 remove a design that has run safely, and a reset keeps it ([Limits](#limits)).
 
 ## The preset `small`
@@ -122,8 +122,9 @@ and the wrapper. The build manifest names `soc.f` as an ordered filelist
 fragment and its directory as an include root (`efpga_inst.vh`), and records
 the hash of each of those files, which FuseSoC staging checks.
 
-Refused, each by name: a bus other than `obi` (the LOG and FlooNoC fabrics
-list their non-memory slaves separately and have no eFPGA slave), a base
+On the `log` and `floonoc` buses the user window is the sixth slave of the
+non-memory tier (`NONMEM_EFPGA_WIN_IDX`); FlooNoC's peripheral endpoint
+already covers every address above the SRAM. Refused, each by name: a base
 configuration without the always-on peripheral `efpga`, and
 `mcu_gen.py --legacy-in-place`. The tapeout rules do not name the key; the
 physical flow refuses a design with a fabric when it lists its files, since
@@ -201,11 +202,18 @@ would, and boots again from the same flash with the design still in the
 fabric (`+warm_reboots` of `tb/tb_top.sv`). `EXIT SUCCESS`
 means that the design synthesised, placed and routed, that the loader took its
 stream and reported `configured`, that TITAN connected it, and that the
-workers then ran. It does not mean that the design does what it should: no
-firmware uses it in this run. Through the flow runner the same is
-`EFPGA_DESIGN=my_design.v ./mosaic flow-runner run tb-soc-fw --config
-configs/mosaic_efpga_demo.yaml`. `tb/efpga/shell_regs.v` is the example: one
-register, written byte by byte, on the bus and on the pads.
+workers then ran.
+
+`EFPGA_TEST=my_test.c` adds the check of what the design does: a C function
+`uint32_t efpga_test(void)`, compiled into TITAN's image with the driver's
+header, which TITAN calls once the workers ran, on every boot. It returns 0
+when the design passed; any other value ends the run with `0x4000_0000` and
+that value. Through the flow runner the same is `EFPGA_DESIGN=my_design.v
+EFPGA_TEST=my_test.c ./mosaic flow-runner run tb-soc-fw --config
+configs/mosaic_efpga_demo.yaml`. The example is `tb/efpga/shell_regs.v`, one
+register written byte by byte, on the bus and on the pads, and its check
+`tb/efpga/shell_regs_test.c`: the register's reset value, a word, a byte,
+every data line each way, and no request left unanswered.
 
 ## How the fabric is configured
 
@@ -622,10 +630,18 @@ testbench writes only the flash model, and TITAN executes in place:
 | Run | Stream in the flash image | Must end with |
 |---|---|---|
 | `boot_bad_crc` | the stream of `bad_crc` | exit value `0x8000_0304`: the loader's refusal (`error`, cause 3, the CRC) with bit 31 set. TITAN reports it only after both workers ran; a worker that had not would have ended the run with its own value |
+| `boot_test` | `bus_regs`, with the user's check `tb/efpga/bus_regs_test.c`, built to stop after the cold boot | exit value `0x4000_0007`: the check ran, read `R0`'s reset value, and returned 7 by design. A check that did not run, or did not read the design, ends otherwise |
 
 The sweep step `efpga_design` boots it with a design the loader takes: the
-one command of [A user's design](#a-users-design) on `tb/efpga/shell_regs.v`,
-with `WARM_REBOOTS=1`. The second boot finds the design in the fabric and must
+one command of [A user's design](#a-users-design) on `tb/efpga/shell_regs.v`
+and its check `shell_regs_test.c`, with `WARM_REBOOTS=1`, so the check runs
+on both boots. `efpga_log` and `efpga_floonoc` run the same command, without
+the reboot, on `configs/mosaic_efpga_demo_log.yaml` and
+`configs/mosaic_efpga_demo_floonoc.yaml`: the same SoC on the other two
+buses. On this machine FlooNoC's generator needs `LD_LIBRARY_PATH` set to
+Nix's libstdc++ and zlib, as the other FlooNoC steps do. `efpga_serv` runs it
+on `configs/mosaic_efpga_serv.yaml`, whose hart 0, which loads the fabric, is
+a bit-serial SERV instead of the cv32e20. The second boot finds the design in the fabric and must
 remove it with the packed unload before it loads it again; without that
 unload its load is refused with cause 5. Measured on 2026-10-19 with the
 unload branch of `cold_boot.c` disabled: the first boot passed, the reboot
@@ -637,8 +653,12 @@ without the fabric or without the second boot.
 
 Measured on 2026-10-19: the `regs` run ends at 214 µs of simulated time
 (`silent` at 78 µs), a boot from flash at about 27 ms, which takes 300 to
-384 s. The `efpga_soc` step took 488 to 513 s, and `efpga_design` 888 s with
-its two boots (warm reboot at 28.4 ms), each alone on the machine; the Verilator build of the SoC with the fabric took 138 s and
+384 s; `boot_test`, which stops after the cold boot, ends at 24.8 ms (311 s):
+reading code, worker images and the stream from the SPI flash model takes most
+of a boot. The `efpga_soc` step took 881 s with its seven runs, and
+`efpga_design` 877 s with its two boots (warm reboot at 28.7 ms),
+`efpga_log` 629 s and `efpga_floonoc` 569 s, each alone on the machine, and
+`efpga_serv` 642 s, its boot ending at 41 ms; the Verilator build of the SoC with the fabric took 138 s and
 1.1 GB on 2026-10-17. The wrapper step took 1,009 s with its 50 runs, and the
 fabric step 91 s.
 
@@ -735,10 +755,10 @@ without generating one.
   raises no interrupt. It was never synthesised: there is no
   area, no timing and no layout, and its clock gate is the generic cell
   model.
-- **What the wrapper's tests do not check.** One fabric, three designs, one
-  core: the load is run only by a cv32e20, from SRAM by the test firmware and
-  from flash by the production firmware, not by SERV. Only `shell_regs`, the
-  third design, uses the byte enables, and it is only loaded, not used.
+- **What the wrapper's tests do not check.** One fabric, three designs, two
+  cores: the load is run by a cv32e20, from SRAM by the test firmware and
+  from flash by the production firmware, and by SERV from flash. Only `shell_regs`, the
+  third design, uses the byte enables, and its check writes one byte.
   Address bits 9 to 3 are checked where they enter the fabric and are used by
   no design. The watchdog is tested at 512
   cycles, not at its default. The wrapper is reset in the middle of a load,
@@ -793,7 +813,7 @@ without generating one.
   pins; only FABulous's timing-model flow parses SDF with it.
 - **A tool combination FABulous does not test.** FABulous 2.2.0's own
   environment pins other Yosys and nextpnr revisions. The evidence that 2.2.0
-  works with Yosys 0.62 and nextpnr 0.9 is the four sweep steps.
+  works with Yosys 0.62 and nextpnr 0.9 is the seven sweep steps.
 - **One preset.** The benches and the wrapper's edge signals are written for
   `small`: 8 pads, and at least four `RAM_IO` rows. The four single-bit
   controls of the fabric bench are fixed positions in the counter's

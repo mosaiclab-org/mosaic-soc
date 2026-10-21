@@ -61,7 +61,10 @@ STEPS=(
   "efpga_fabric|TB PASS|tb/efpga/run.sh"
   "efpga_wrapper|TB PASS|tb/efpga/run_wrapper.sh"
   "efpga_soc|^### RESULT: EXIT SUCCESS|tb/mosaic_soc/run_efpga.sh"
-  "efpga_design|^### RESULT: EXIT SUCCESS.* with shell_regs.v in its eFPGA, warm reboots: 1 |MOSAIC_CFG=configs/mosaic_efpga_demo.yaml EFPGA_DESIGN=tb/efpga/shell_regs.v WARM_REBOOTS=1 tb/mosaic_soc/run_fw.sh"
+  "efpga_design|^### RESULT: EXIT SUCCESS.* with shell_regs.v in its eFPGA, checked by shell_regs_test.c, warm reboots: 1 |MOSAIC_CFG=configs/mosaic_efpga_demo.yaml EFPGA_DESIGN=tb/efpga/shell_regs.v EFPGA_TEST=tb/efpga/shell_regs_test.c WARM_REBOOTS=1 tb/mosaic_soc/run_fw.sh"
+  "efpga_log|^### RESULT: EXIT SUCCESS.* with shell_regs.v in its eFPGA, checked by shell_regs_test.c, warm reboots: 0 |MOSAIC_CFG=configs/mosaic_efpga_demo_log.yaml EFPGA_DESIGN=tb/efpga/shell_regs.v EFPGA_TEST=tb/efpga/shell_regs_test.c tb/mosaic_soc/run_fw.sh"
+  "efpga_floonoc|^### RESULT: EXIT SUCCESS.* with shell_regs.v in its eFPGA, checked by shell_regs_test.c, warm reboots: 0 |MOSAIC_CFG=configs/mosaic_efpga_demo_floonoc.yaml EFPGA_DESIGN=tb/efpga/shell_regs.v EFPGA_TEST=tb/efpga/shell_regs_test.c tb/mosaic_soc/run_fw.sh"
+  "efpga_serv|^### RESULT: EXIT SUCCESS.* with shell_regs.v in its eFPGA, checked by shell_regs_test.c, warm reboots: 0 |MOSAIC_CFG=configs/mosaic_efpga_serv.yaml EFPGA_DESIGN=tb/efpga/shell_regs.v EFPGA_TEST=tb/efpga/shell_regs_test.c tb/mosaic_soc/run_fw.sh"
 
   "wake_obi|$EXIT_OK|tb/mosaic_soc/run.sh"
   "wake_log|$EXIT_OK|MOSAIC_CFG=configs/mosaic_wake_demo_log.yaml tb/mosaic_soc/run.sh"

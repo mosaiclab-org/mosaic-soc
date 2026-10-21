@@ -91,10 +91,16 @@ def test_a_wrong_value_is_refused_by_name(value, error):
 
 
 @pytest.mark.parametrize("bus", ["log", "floonoc"])
-def test_only_the_obi_crossbar_has_the_slave(bus):
-    cfg = _demo()
-    cfg["soc"]["bus"] = bus
-    assert f"soc.efpga needs bus 'obi'; {bus!r} has no eFPGA slave" in validate_soc_config(cfg)
+def test_the_log_and_floonoc_tier_has_the_slave(bus):
+    path = REPO / "configs" / f"mosaic_efpga_demo_{bus}.yaml"
+    assert validate_soc_config(yaml.safe_load(path.read_text())) == []
+    kwargs = _kwargs(path)
+    package = _render("hw/mosaic_soc/include/mosaic_soc_pkg.sv.tpl", kwargs)
+    xbar = _render("hw/mosaic_soc/system_xbar.sv.tpl", kwargs)
+    assert "NONMEM_TIER_NSLAVE = 6;" in package
+    assert "'{ idx: NONMEM_EFPGA_WIN_IDX, start_addr: EFPGA_WIN_START_ADDRESS" in package
+    assert re.search(r"slave_req_o\[EFPGA_WIN_IDX\][^\n]*= nonmem_\w+\[5\]", xbar)
+    assert bus == "log" or "1-to-6 demux" in xbar
 
 
 def test_a_tapeout_target_leaves_the_fabric_to_the_physical_flow():
