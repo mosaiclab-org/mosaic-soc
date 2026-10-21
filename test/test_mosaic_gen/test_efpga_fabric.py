@@ -398,6 +398,26 @@ def test_the_shell_holds_ack_low_and_the_pads_released_when_unbound():
     assert '"X0Y8.B"' in narrow and '"X0Y1.A"' in narrow  # pad 0, pad 15
 
 
+def test_the_task_ports_are_where_the_wrapper_drives_them():
+    """hw/efpga/mosaic_efpga.sv puts task_valid on ctl[15] and task_id on
+    ctl[31:16] of the east edge, reads task_result from the second byte of
+    each row's outputs and task_done from FAB2RAM_C.I1 of the first row."""
+    pins = _pins(efpga_gen.shell_wrapper("all", _all_ports(SMALL), SMALL))
+    assert pins["task_valid"] == ("X3Y3.RAM2FAB_D3", "InPass4_frame_config_mux", "O3")
+    assert pins["task_id[0]"] == ("X3Y2.RAM2FAB_D2", "InPass4_frame_config_mux", "O0")
+    assert pins["task_id[15]"] == ("X3Y1.RAM2FAB_D3", "InPass4_frame_config_mux", "O3")
+    assert pins["task_result[0]"] == ("X3Y4.FAB2RAM_D2", "OutPass4_frame_config_mux", "I0")
+    assert pins["task_result[31]"] == ("X3Y1.FAB2RAM_D3", "OutPass4_frame_config_mux", "I3")
+    assert pins["task_done"] == ("X3Y4.FAB2RAM_C", "OutPass4_frame_config_mux", "I1")
+    wrapper = (REPO_ROOT / "hw/efpga/mosaic_efpga.sv").read_text()
+    assert "{task_q[31:16], t_valid_q, u_addr_q, u_be_q, ~user_rst_q, u_we_q," in wrapper
+    assert "assign result_x[8*g+:8] = FAB2RAM_D_O[16*g+8+:8];" in wrapper
+    assert "done_q <= fab_en & FAB2RAM_C_O[1];" in wrapper
+    # Without task_done the shell holds it low: no task ends.
+    held = efpga_gen.shell_wrapper("leds", {"clk": ("input", 1)}, SMALL)
+    assert held.count(".I1(1'b0)") == 1
+
+
 @pytest.mark.parametrize("ports, error", [
     ({"irq": ("output", 1)}, "port irq .* is not in the shell"),
     ({"addr": ("input", 30)}, "port addr .* is not in the shell"),

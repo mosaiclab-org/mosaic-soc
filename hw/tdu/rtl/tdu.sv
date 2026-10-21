@@ -49,7 +49,17 @@ module tdu #(
     output logic [NUM_HARTS-1:0] core_park_o,
 
     // Event interrupt to the TITAN core (asserted on task enqueue)
-    output logic                 tdu_irq_o
+    output logic                 tdu_irq_o,
+
+    // A worker that is not a hart (the eFPGA wrapper of soc.efpga, on the last
+    // slot) takes the head of the queue as a hart does with a read of
+    // TASK_POP, but only a head whose core_hint names that slot. A request is
+    // granted in a cycle without such a read, and the grant carries the head
+    // it took, or 0, the queue then left as it was. Tie the request low where
+    // there is no such worker.
+    input  logic                 hw_pop_req_i,
+    output logic                 hw_pop_gnt_o,
+    output logic [31:0]          hw_pop_data_o
 );
 
   import reg_pkg::*;
@@ -115,6 +125,16 @@ module tdu #(
   logic [31:0] rdata_d;
   logic        error_d;
   logic        ready_d;
+
+  // The pop of a worker that is not a hart (see the port list). A read of
+  // TASK_POP in the same cycle goes first; the request waits a cycle. A head
+  // meant for a hart stays for the hart.
+  logic hw_pop_take;
+  assign hw_pop_gnt_o  = hw_pop_req_i &&
+                         !(req_valid && !req_write && req_addr == TDU_TASK_POP_OFFSET);
+  assign hw_pop_take   = hw_pop_gnt_o && !empty &&
+                         pop_data.core_hint == TASK_HINT_BITS'(NUM_HARTS - 1);
+  assign hw_pop_data_o = hw_pop_take ? pop_data : 32'h0;
 
   always_comb begin
     // Defaults
@@ -241,6 +261,7 @@ module tdu #(
         endcase
       end
     end
+    if (hw_pop_take) pop = 1'b1;
   end
 
   assign reg_rsp_o = '{error: error_d, ready: ready_d, rdata: rdata_d};

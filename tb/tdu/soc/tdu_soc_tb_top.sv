@@ -29,7 +29,11 @@ module tdu_soc_tb_top #(
     input  logic [NUM_HARTS-1:0] core_sleep_i,
     output logic [NUM_HARTS-1:0] core_wake_o,
     output logic [NUM_HARTS-1:0] core_park_o,
-    output logic                                      tdu_irq_o
+    output logic                                      tdu_irq_o,
+    // the pop of a worker that is not a hart, on the last slot (the eFPGA's)
+    input  logic                                      hw_pop_req_i,
+    output logic                                      hw_pop_gnt_o,
+    output logic [                              31:0] hw_pop_data_o
 );
   // Keep this integration test independent of whichever configuration last
   // rendered mosaic_soc_pkg.sv into the source tree.
@@ -79,6 +83,9 @@ module tdu_soc_tb_top #(
       .core_sleep_i  (core_sleep_i),
       .core_wake_o   (core_wake_o),
       .core_park_o   (core_park_o),
-      .tdu_irq_o     (tdu_irq_o)
+      .tdu_irq_o     (tdu_irq_o),
+      .hw_pop_req_i,
+      .hw_pop_gnt_o,
+      .hw_pop_data_o
   );
 endmodule

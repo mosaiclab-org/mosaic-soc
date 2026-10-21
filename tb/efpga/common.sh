@@ -6,14 +6,15 @@
 
 OUT="$REPO/build/efpga/small"
 
-# Generate the `small` fabric preset and the streams of the two user designs
+# Generate the `small` fabric preset and the streams of the three user designs
 # with the pinned FABulous flow (util/mosaic_gen/efpga_gen.py, which needs
 # `nix develop .#efpga`; entered here when its tools are not on PATH). Sets
 # DEFS, the geometry as the -D options of the benches.
 efpga_generate() {
   local gen=(python3 util/mosaic_gen/efpga_gen.py --preset configs/efpga/small.csv --out "$OUT"
              --design tb/efpga/counter8_en.v --wrapper tb/efpga/counter8_en_wrapper.v
-             --design tb/efpga/bus_regs.v --wrapper tb/efpga/bus_regs_wrapper.v)
+             --design tb/efpga/bus_regs.v --wrapper tb/efpga/bus_regs_wrapper.v
+             --shell tb/efpga/task_count.v)
   if command -v FABulous >/dev/null; then
     "${gen[@]}"
   else

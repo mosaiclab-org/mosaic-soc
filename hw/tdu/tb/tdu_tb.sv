@@ -39,7 +39,10 @@ module tdu_tb;
       .core_sleep_i   (core_sleep),
       .core_wake_o    (core_wake),
       .core_park_o    (core_park),
-      .tdu_irq_o      (tdu_irq)
+      .tdu_irq_o      (tdu_irq),
+      .hw_pop_req_i   (1'b0),
+      .hw_pop_gnt_o   (),
+      .hw_pop_data_o  ()
   );
 
   // ── Clock ───────────────────────────────────────────────────────

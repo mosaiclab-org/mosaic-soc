@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
 #
 # tb/efpga/run_wrapper.sh — hw/efpga/mosaic_efpga.sv alone: the loader, the
-# unload, the isolation and the user window, with real bitstreams.
+# unload, the isolation, the user window and the worker slot, with real
+# bitstreams.
 #
 #   1. Generate the `small` fabric preset and the streams that load and unload
-#      the two user designs (efpga_generate in tb/efpga/common.sh), and derive
+#      the three user designs (efpga_generate in tb/efpga/common.sh), and derive
 #      the streams the loader must refuse.
 #   2. Build tb_mosaic_efpga.sv around the wrapper and the fabric with Icarus
 #      and with the pinned Verilator. Icarus starts every latch and flip-flop
@@ -123,7 +124,8 @@ STREAMS=("+silent=$SILENT" "+regs=$REGS" "+silent_unload=$SILENT_UNLOAD"
          "+coverage_first=$OBJ/coverage_first.hex" "+empty=$OBJ/empty.hex"
          "+unload_fault=$OBJ/unload_fault.hex" "+unload_cov=$OBJ/unload_cov.hex"
          "+no_tag=$OBJ/no_tag.hex" "+bad_check=$OBJ/bad_check.hex" "+regs_head=$OBJ/regs_head.hex"
-         "+stray=$OBJ/stray.hex")
+         "+stray=$OBJ/stray.hex" "+task=$OUT/bitstream/task_count.hex"
+         "+task_unload=$OUT/bitstream/task_count.unload.hex")
 RUNS=0
 for sim in icarus verilator; do
   case $sim in
@@ -162,8 +164,13 @@ reset_forgets           warm_reset_cleared       +fault=reset_forgets
 check_forgets           warm_reset_cleared       +fault=check_forgets
 check_b_forgets         warm_reset_cleared       +fault=check_b_forgets
 no_tag_is_good          untagged_design_accepted +no_tag=$REGS
+task                    pass                     +task_run
+no_park                 park_ignored             +task_run +fault=no_park
+cut_ignored             task_without_a_design    +task_run +fault=cut_ignored
+task_result_pin         task_result              +task_run +fault=task_result_pin
+sleep_stuck             slot_asleep_with_a_task  +task_run +fault=sleep_stuck
 EOF
 done
-[ $FAILED -eq 0 ] && [ $RUNS -eq 50 ] \
+[ $FAILED -eq 0 ] && [ $RUNS -eq 60 ] \
   || { echo "TB FAIL reason=a_run_did_not_give_the_expected_result"; exit 1; }
 echo "TB PASS wrapper=mosaic_efpga fabric=small simulators=icarus,verilator runs=$RUNS"

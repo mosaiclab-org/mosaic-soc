@@ -7,17 +7,21 @@
 // `eFPGA`, which is whatever the bitstream makes it. FABulous's eFPGA_top and
 // its configuration logic are not used. docs/efpga.md is the reference.
 //
-// Register port (four registers, never an error; a write that does not carry
+// Register port (six registers, never an error; a write that does not carry
 // all four bytes is dropped):
 //   0x0 BITSTREAM  W   the next word of a stream: <design>.hex or
 //                      <design>.unload.hex of util/mosaic_gen/efpga_gen.py
 //   0x4 STATUS     R   [0] busy  [1] configured  [2] error
 //                      [3] timeout: the user design did not answer   (W1C)
 //                      [4] blocked: an access while isolated         (W1C)
+//                      [5] cut: a task ended without the design's task_done
+//                          (cut off, or parked by the TDU)             (W1C)
 //                      [10:8] cause of the error (cause_e)
 //   0x8 CONTROL    RW  [0] isolate (reset 1)  [1] user reset (reset 1)
 //                      W [2] clear: forget the configuration and start again
 //   0xC TAG        R   [15:0] the tag of the design in the latches, 0: none
+//   0x10 TASK      R   the descriptor of the last task taken from the TDU
+//   0x14 RESULT    R   the design's task_result for it, NoAnswer if it was cut
 //
 // A stream starts with the sync word. Each frame (a header, then a data word
 // per row) is followed by a check word, and the end word by the CRC: each is
@@ -55,6 +59,20 @@
 // of a clear or of an unload, every input is 0 (the user reset, active low,
 // among them) and every output is ignored.
 //
+// Worker slot. The fabric is the last slot of the TDU (EFPGA_TDU_SLOT): a
+// descriptor pushed with that core_hint wakes the slot, which then takes the
+// head of the TDU's queue, as a woken hart reads TASK_POP, if the head is for
+// the slot; a pop of 0 (an empty queue, or a head for a hart) puts it back to
+// sleep. The design gets task_valid and the
+// descriptor's task_id, under the four-phase handshake of the bus below, and
+// its task_done ends the task: the slot keeps task_result in RESULT and goes
+// back to sleep, which the TDU sees in CORE_STATUS. A task taken while the
+// fabric is cut off, cut off while it runs, or parked by the TDU (PARK_REQ)
+// ends at once with `cut` and NoAnswer. task_valid then falls before
+// task_done, which withdraws the task: the design must drop it, since a
+// task_done it raises later would end the next task. A design that cannot
+// drop a task needs its user reset after a cut.
+//
 // User window. MOSAIC's OBI response has no error signal, so the hard part
 // answers every request itself: with NoAnswer (0xFAB0_0BAD) when the fabric is
 // cut off, at the request or while it is open (`blocked`), or when the user
@@ -68,6 +86,9 @@
 //   RAM2FAB_D_I[16g+8 +: 8]  ctl[8g +: 8], ctl = {addr[9:2], be, rst_n, we, valid}
 //   FAB2RAM_D_O[16g   +: 8]  rdata[8g +: 8]
 //   FAB2RAM_C_O[0]           ack
+// with ctl[15] task_valid and ctl[31:16] task_id, and for g < 4
+//   FAB2RAM_D_O[16g+8 +: 8]  task_result[8g +: 8]
+//   FAB2RAM_C_O[1]           task_done
 // Four-phase handshake: valid stays high, with addr, we, be and wdata stable,
 // until ack is seen high; ack must then fall before the next request starts.
 // A design acts once, when it raises ack, and never raises ack while valid is
@@ -91,6 +112,15 @@ module mosaic_efpga #(
 
     input  obi_pkg::obi_req_t  obi_req_i,
     output obi_pkg::obi_resp_t obi_resp_o,
+
+    // The slot of the TDU: its wake and park pulses, whether it sleeps, and
+    // the TDU's pop for a worker that is not a hart. Tied off without a TDU.
+    input  logic        task_wake_i,
+    input  logic        task_park_i,
+    output logic        task_sleep_o,
+    output logic        task_pop_o,
+    input  logic        task_pop_gnt_i,
+    input  logic [31:0] task_pop_data_i,
 
     // The pads of the west edge, two per row. pad_oe_o is 0 while isolated.
     // Connected, a pad the design does not bind is not released: its enable
@@ -175,7 +205,7 @@ module mosaic_efpga #(
   // `configured` is a flop of its own, not a decode of load_q: with `isolate`
   // it gates everything that touches the fabric, and a decode of several state
   // bits could glitch while the loader steps.
-  logic configured_q, isolate_q, user_rst_q, timeout_q, blocked_q;
+  logic configured_q, isolate_q, user_rst_q, timeout_q, blocked_q, cut_q;
   logic out_of_reset_q;  // one clock edge has passed since the reset
   logic unload_q;  // the stream being taken removes the design in the latches
   logic [15:0] tag;
@@ -189,13 +219,14 @@ module mosaic_efpga #(
   logic [RowW-1:0] row_q;
   logic [31:0] crc_q;
   logic [WdogW-1:0] wdog_q;
-  logic set_timeout, set_blocked;
+  logic set_timeout, set_blocked, set_cut;
+  logic [31:0] task_q, result_q;
 
   logic reg_wr, bs_ready, bs_word, sync, clear, flush, tag_ok, frame_ok;
-  logic [ 1:0] reg_idx;  // 0 BITSTREAM, 1 STATUS, 2 CONTROL, 3 TAG
+  logic [ 2:0] reg_idx;  // 0 BITSTREAM, 1 STATUS, 2 CONTROL, 3 TAG, 4 TASK, 5 RESULT
   logic [31:0] wdata;
   assign wdata   = reg_req_i.wdata;
-  assign reg_idx = reg_req_i.addr[3:2];
+  assign reg_idx = reg_req_i.addr[4:2];
   assign reg_wr  = reg_req_i.valid & reg_req_i.write & (&reg_req_i.wstrb);
   // The loader takes no word while it clears the latches or strobes a frame.
   // `loading`: it waits for the next word of a stream, or for the sync word
@@ -206,10 +237,10 @@ module mosaic_efpga #(
   assign loading = load_q == L_SYNC || load_q == L_TAG || load_q == L_HDR ||
       load_q == L_DATA || load_q == L_CHECK || load_q == L_CRC;
   assign bs_ready = !stepping;
-  assign bs_word = reg_wr && reg_idx == 2'd0 && bs_ready;
+  assign bs_word = reg_wr && reg_idx == 3'd0 && bs_ready;
   assign sync = bs_word && wdata == SyncWord &&
       (load_q == L_IDLE || load_q == L_SYNC || load_q == L_DONE);
-  assign clear = reg_wr && reg_idx == 2'd2 && wdata[2];
+  assign clear = reg_wr && reg_idx == 3'd2 && wdata[2];
   assign flush = load_q == L_FLUSH;
   assign tag_ok = wdata == (UnloadWord | 32'(tag));
   assign frame_ok = wdata == ~crc_q;
@@ -225,21 +256,24 @@ module mosaic_efpga #(
 
   always_comb begin
     reg_rsp_o = '0;
-    reg_rsp_o.ready = reg_idx != 2'd0 || !reg_req_i.write || bs_ready;
+    reg_rsp_o.ready = reg_idx != 3'd0 || !reg_req_i.write || bs_ready;
     unique case (reg_idx)
-      2'd1:
+      3'd1:
       reg_rsp_o.rdata = {
         21'b0,
         cause_q,
-        3'b0,
+        2'b0,
+        cut_q,
         blocked_q,
         timeout_q,
         cause_q != CAUSE_NONE && !busy,
         configured_q,
         busy
       };
-      2'd2: reg_rsp_o.rdata = {30'b0, user_rst_q, isolate_q};
-      2'd3: reg_rsp_o.rdata = {16'b0, tag};
+      3'd2: reg_rsp_o.rdata = {30'b0, user_rst_q, isolate_q};
+      3'd3: reg_rsp_o.rdata = {16'b0, tag};
+      3'd4: reg_rsp_o.rdata = task_q;
+      3'd5: reg_rsp_o.rdata = result_q;
       default: ;
     endcase
   end
@@ -260,6 +294,7 @@ module mosaic_efpga #(
       user_rst_q <= 1'b1;
       timeout_q <= 1'b0;
       blocked_q <= 1'b0;
+      cut_q <= 1'b0;
       strobe_q <= '0;
       strobed_q <= '0;
       col_q <= '0;
@@ -269,13 +304,15 @@ module mosaic_efpga #(
       wdog_q <= '0;
     end else begin
       out_of_reset_q <= 1'b1;
-      if (reg_wr && reg_idx == 2'd1) begin  // write 1 to clear
+      if (reg_wr && reg_idx == 3'd1) begin  // write 1 to clear
         if (wdata[3]) timeout_q <= 1'b0;
         if (wdata[4]) blocked_q <= 1'b0;
+        if (wdata[5]) cut_q <= 1'b0;
       end
       if (set_timeout) timeout_q <= 1'b1;  // a flag set in the cycle of its clear stays
       if (set_blocked) blocked_q <= 1'b1;
-      if (reg_wr && reg_idx == 2'd2) begin
+      if (set_cut) cut_q <= 1'b1;
+      if (reg_wr && reg_idx == 3'd2) begin
         isolate_q  <= wdata[0];
         user_rst_q <= wdata[1];
       end
@@ -378,6 +415,7 @@ module mosaic_efpga #(
             user_rst_q <= 1'b1;
             timeout_q <= 1'b0;
             blocked_q <= 1'b0;
+            cut_q <= 1'b0;
           end else if (!has_tag) cause_q <= CAUSE_TAG;  // it could not be unloaded
           else begin
             load_q <= L_DONE;
@@ -407,6 +445,7 @@ module mosaic_efpga #(
         user_rst_q <= 1'b1;
         timeout_q <= 1'b0;
         blocked_q <= 1'b0;
+        cut_q <= 1'b0;
         strobed_q <= '0;
       end
     end
@@ -518,6 +557,78 @@ module mosaic_efpga #(
     end
   end
 
+  // ----------------------------------------------------------- the worker slot
+  typedef enum logic [1:0] {
+    T_SLEEP,
+    T_POP,   // woken: the slot takes the head of the TDU's queue
+    T_LOW,   // the task_done of the previous task has not fallen yet
+    T_RUN
+  } task_e;
+
+  task_e t_state_q;
+  logic t_valid_q, done_q;
+  logic [31:0] t_result_q;
+  logic [8*ROWS-1:0] result_x;
+
+  assign task_sleep_o = t_state_q == T_SLEEP;
+  assign task_pop_o = t_state_q == T_POP;
+
+  // A task taken from the queue that does not end with task_done is cut.
+  always_comb begin
+    set_cut = 1'b0;
+    unique case (t_state_q)
+      T_POP: set_cut = task_pop_gnt_i && task_pop_data_i != '0 && (task_park_i || !fab_en);
+      T_LOW: set_cut = task_park_i || !fab_en;
+      T_RUN: set_cut = !done_q && (task_park_i || !fab_en);
+      default: ;
+    endcase
+  end
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      t_state_q <= T_SLEEP;
+      t_valid_q <= 1'b0;
+      done_q <= 1'b0;
+      t_result_q <= '0;
+      task_q <= '0;
+      result_q <= '0;
+    end else begin
+      done_q <= fab_en & FAB2RAM_C_O[1];
+      t_result_q <= result_x[31:0];
+      unique case (t_state_q)
+        T_SLEEP: if (task_wake_i) t_state_q <= T_POP;
+        // As with the bus, a task taken in the first cycle after the fabric
+        // was connected waits a cycle: task_done may be left high from before.
+        T_POP:
+        if (task_pop_gnt_i) begin
+          if (task_pop_data_i == '0) t_state_q <= T_SLEEP;  // the queue was empty
+          else begin
+            task_q   <= task_pop_data_i;
+            result_q <= NoAnswer;
+            if (set_cut) t_state_q <= T_SLEEP;
+            else if (done_q || !fab_en_q) t_state_q <= T_LOW;
+            else begin
+              t_valid_q <= 1'b1;
+              t_state_q <= T_RUN;
+            end
+          end
+        end else if (task_park_i) t_state_q <= T_SLEEP;
+        T_LOW:
+        if (set_cut) t_state_q <= T_SLEEP;
+        else if (!done_q) begin
+          t_valid_q <= 1'b1;
+          t_state_q <= T_RUN;
+        end
+        default:  // T_RUN
+        if (done_q || set_cut) begin
+          if (done_q) result_q <= t_result_q;
+          t_valid_q <= 1'b0;
+          t_state_q <= T_SLEEP;
+        end
+      endcase
+    end
+  end
+
   // ------------------------------------------------------------------ isolation
   tc_clk_gating fabric_clk_gate_i (
       .clk_i,
@@ -527,10 +638,12 @@ module mosaic_efpga #(
   );
 
   assign wdata_x = (8 * ROWS)'(u_wdata_q);
-  assign ctl_x   = (8 * ROWS)'({u_addr_q, u_be_q, ~user_rst_q, u_we_q, u_valid_q});
+  assign ctl_x   = (8 * ROWS)'({task_q[31:16], t_valid_q, u_addr_q, u_be_q, ~user_rst_q, u_we_q,
+                                 u_valid_q});
   for (genvar g = 0; g < ROWS; g++) begin : gen_east_edge
     assign RAM2FAB_D_I[16*g+:16] = fab_en ? {ctl_x[8*g+:8], wdata_x[8*g+:8]} : '0;
     assign rdata_x[8*g+:8] = FAB2RAM_D_O[16*g+:8];
+    assign result_x[8*g+:8] = FAB2RAM_D_O[16*g+8+:8];
   end
 
   assign O_top = fab_en ? pad_in_i : '0;

@@ -289,14 +289,19 @@ def tag_lines(tag, features):
 # top_wrapper may have, each with its direction and width. A design has any of
 # them and no other. addr is the word address (byte address [9:2]), be its
 # byte enables; io_* are the pads, io_oeb low driving one, as many as the
-# design binds of the preset's two per row (width None).
+# design binds of the preset's two per row (width None); task_* are the
+# fabric's slot of the TDU: task_id of a task, under task_valid until
+# task_done, with task_result.
 SHELL = {
     "clk": ("input", 1), "rst_n": ("input", 1), "valid": ("input", 1), "we": ("input", 1),
     "be": ("input", 4), "addr": ("input", 8), "wdata": ("input", 32),
     "ack": ("output", 1), "rdata": ("output", 32),
     "io_in": ("input", None), "io_out": ("output", None), "io_oeb": ("output", None),
+    "task_valid": ("input", 1), "task_id": ("input", 16),
+    "task_done": ("output", 1), "task_result": ("output", 32),
 }
-CTL = ["valid", "we", "rst_n"] + [f"be[{k}]" for k in range(4)] + [f"addr[{k}]" for k in range(8)]
+CTL = (["valid", "we", "rst_n"] + [f"be[{k}]" for k in range(4)] + [f"addr[{k}]" for k in range(8)]
+       + ["task_valid"] + [f"task_id[{k}]" for k in range(16)])
 
 
 def _shell_pins(geometry):
@@ -304,17 +309,20 @@ def _shell_pins(geometry):
     drives the edges: row g of the east edge is the RAM_IO tile at
     Y<rows - g>, whose input n of 16 is RAM2FAB_D<n // 4>.O<n % 4> (wdata[8g +:
     8], then ctl[8g +: 8], ctl = CTL) and output n FAB2RAM_D<n // 4>.I<n % 4>
-    (rdata[8g +: 8]); ack is FAB2RAM_C.I0 of row 0. Pad k is the W_IO BEL B
-    (k even) or A of the tile at Y<rows - k // 2>."""
+    (rdata[8g +: 8], then task_result[8g +: 8]); ack and task_done are
+    FAB2RAM_C.I0 and I1 of row 0. Pad k is the W_IO BEL B (k even) or A of the
+    tile at Y<rows - k // 2>."""
     east, rows = f"X{geometry['cols'] - 1}Y", geometry["rows"]
-    pins = {"clk": ("", "Global_Clock", "CLK"), "ack": (f"{east}{rows}.FAB2RAM_C",
-                                                      "OutPass4_frame_config_mux", "I0")}
+    out = "OutPass4_frame_config_mux"
+    pins = {"clk": ("", "Global_Clock", "CLK"), "ack": (f"{east}{rows}.FAB2RAM_C", out, "I0"),
+            "task_done": (f"{east}{rows}.FAB2RAM_C", out, "I1")}
     for bit in range(32):
         row, n = divmod(bit, 8)
         pins[f"wdata[{bit}]"] = (f"{east}{rows - row}.RAM2FAB_D{n // 4}",
                                  "InPass4_frame_config_mux", f"O{n % 4}")
-        pins[f"rdata[{bit}]"] = (f"{east}{rows - row}.FAB2RAM_D{n // 4}",
-                                 "OutPass4_frame_config_mux", f"I{n % 4}")
+        pins[f"rdata[{bit}]"] = (f"{east}{rows - row}.FAB2RAM_D{n // 4}", out, f"I{n % 4}")
+        pins[f"task_result[{bit}]"] = (f"{east}{rows - row}.FAB2RAM_D{2 + n // 4}", out,
+                                       f"I{n % 4}")
     for bit, name in enumerate(CTL):
         row, n = divmod(bit, 8)
         pins[name] = (f"{east}{rows - row}.RAM2FAB_D{2 + n // 4}",
@@ -329,10 +337,10 @@ def _shell_pins(geometry):
 def shell_wrapper(module, ports, geometry):
     """The top_wrapper that binds ``module``, whose ``ports`` are {name:
     (direction, width)}, to the edges of the fabric through the shell. Without
-    ack, the shell holds it low (the wrapper's timeout answers); without
-    io_oeb, it holds every pad released, and every pad beyond its width: an
-    unbound output of the fabric would follow whatever its default route
-    carries."""
+    ack, the shell holds it low (the wrapper's timeout answers), and task_done
+    too (no task ends; the TDU parks it); without io_oeb, it holds every pad
+    released, and every pad beyond its width: an unbound output of the fabric
+    would follow whatever its default route carries."""
     pads = 2 * geometry["rows"]
     for name, (direction, width) in ports.items():
         expected = SHELL.get(name, (None, 0))
@@ -348,7 +356,7 @@ def shell_wrapper(module, ports, geometry):
             signal = f"{name}[{bit}]" if width > 1 else name
             bel, cell, pin = pins[f"{name}[{bit}]" if signal not in pins else signal]
             cells.setdefault((bel, cell), []).append(f".{pin}({signal})")
-    held = [] if "ack" in ports else [("ack", "1'b0")]
+    held = [(name, "1'b0") for name in ("ack", "task_done") if name not in ports]
     held += [(f"io_oeb[{pad}]", "1'b1") for pad in range(ports.get("io_oeb", (0, 0))[1], pads)]
     for signal, value in held:
         bel, cell, pin = pins[signal]

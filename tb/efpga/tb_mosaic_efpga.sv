@@ -7,7 +7,8 @@
 // with their unload streams.
 //
 // +silent_run loads the design that never acknowledges, and unloads it after
-// it ran. A run without it loads the design with two registers, keeps it
+// it ran. +task_run loads task_count and gives it tasks as the TDU would, the
+// bench in the TDU's place on the worker slot. A run without either loads the design with two registers, keeps it
 // through a reset after it ran, and replaces it with the other design and
 // back (step 6). Only an unload removes a design that has run: clearing one
 // can make the fabric oscillate (docs/efpga.md). A stream that was refused,
@@ -29,6 +30,8 @@
 //   +no_tag=, +bad_check=  bus_regs with the latches of its tag at 0, or those
 //                    of its check, the checks recomputed
 //   +regs_head=      bus_regs up to the last pass, which holds the tag
+//   +task=, +task_unload=  task_count, a design against the shell with the
+//                    task ports alone, and the stream that removes it
 //   +stray=          one word that is not the sync word
 // Negative controls: the runner passes a stream in the wrong role, or one of
 //   +no_truncate     send the whole stream where the bench first cuts one short
@@ -49,9 +52,10 @@ module tb_mosaic_efpga;
     localparam logic [31:0] NO_ANSWER = 32'hFAB0_0BAD;
     localparam logic [31:0] R0_RESET = 32'h600D_F00D;
     localparam logic [3:0] BITSTREAM = 4'h0, STATUS = 4'h4, CONTROL = 4'h8, TAG = 4'hC;
-    // STATUS: {cause[10:8], blocked, timeout, error, configured, busy}
+    localparam logic [4:0] TASK = 5'h10, RESULT = 5'h14;
+    // STATUS: {cause[10:8], cut, blocked, timeout, error, configured, busy}
     localparam logic [10:0] IDLE = 11'h000, CONFIGURED = 11'h002, TIMEOUT = 11'h008,
-                            BLOCKED = 11'h010;
+                            BLOCKED = 11'h010, CUT = 11'h020;
     localparam logic [10:0] E_COLUMN = 11'h104, E_COVERAGE = 11'h204, E_CRC = 11'h304,
                             E_WATCHDOG = 11'h404, E_TAG = 11'h504;
     localparam int COUNT_CYCLES = 300;
@@ -63,6 +67,19 @@ module tb_mosaic_efpga;
     obi_pkg::obi_resp_t obi_rsp;
     logic [7:0] pad_in = '0;
     wire [7:0] pad_out, pad_oe;
+
+    // The TDU, as the slot sees it: one descriptor at the head of the queue
+    // (0: empty), which the bench sets and the slot's first granted pop
+    // takes. A pop is granted at once, unless the bench holds the grant
+    // back, as a read of TASK_POP in the same cycle would.
+    logic task_wake = 1'b0, task_park = 1'b0, hold_grant = 1'b0;
+    wire task_sleep, task_pop, task_gnt;
+    wire [31:0] task_data;
+    logic [31:0] head = '0;
+    int pops = 0, head_pops = 0;  // the head stands until the grant after head_pops
+    assign task_gnt = task_pop && !hold_grant;
+    assign task_data = task_gnt && pops == head_pops ? head : '0;
+    always @(posedge clk) if (task_gnt) pops <= pops + 1;
 
     mosaic_efpga #(
         .ROWS(ROWS),
@@ -78,6 +95,12 @@ module tb_mosaic_efpga;
         .reg_rsp_o(reg_rsp),
         .obi_req_i(obi_req),
         .obi_resp_o(obi_rsp),
+        .task_wake_i(task_wake),
+        .task_park_i(task_park),
+        .task_sleep_o(task_sleep),
+        .task_pop_o(task_pop),
+        .task_pop_gnt_i(task_gnt),
+        .task_pop_data_i(task_data),
         .pad_in_i(pad_in),
         .pad_out_o(pad_out),
         .pad_oe_o(pad_oe)
@@ -174,16 +197,40 @@ module tb_mosaic_efpga;
             if (dut.RAM2FAB_D_I !== east_want) fail("east_edge_pins");
         end
 
+    // What a design sees of a task on the east edge: task_valid is ctl[15] and
+    // task_id ctl[31:16] (the table of docs/efpga.md). Whenever task_valid is
+    // high there, task_id is that of the task the bench gave.
+    logic [15:0] task_want = '0;
+    int task_seen = 0;
+    wire [15:0] edge_id = {dut.RAM2FAB_D_I[16*3+8+:8], dut.RAM2FAB_D_I[16*2+8+:8]};
+    always @(negedge clk)
+        if (dut.RAM2FAB_D_I[16*1+8+7]) begin
+            task_seen++;
+            if (edge_id !== task_want) fail("task_id_pins");
+        end
+
+    // A task_done left high from before, as the slot samples it. Not forced
+    // from a task: Icarus refuses a force in an automatic scope.
+    logic done_probe = 1'b0;
+    always @(done_probe)
+        if (done_probe) force dut.done_q = 1'b1;
+        else release dut.done_q;
+    // The same at the fabric's output, task_done high and ack low.
+    logic done_pin_probe = 1'b0;
+    always @(done_pin_probe)
+        if (done_pin_probe) force dut.FAB2RAM_C_O = {{(4 * ROWS - 2) {1'b0}}, 2'b10};
+        else release dut.FAB2RAM_C_O;
+
     // ---------------------------------------------------------------- bus master
     // Requests change at the falling edge; a transfer happens at the rising edge
     // at which the request and the combinational ready or grant are both high.
-    task automatic reg_access(input logic write, input logic [3:0] addr,
+    task automatic reg_access(input logic write, input logic [4:0] addr,
                               input logic [31:0] wdata, output logic [31:0] value);
         logic done;
         reg_req.valid = 1'b1;
         reg_req.write = write;
         reg_req.wstrb = '1;
-        reg_req.addr  = {28'h2007_000, addr};
+        reg_req.addr  = 32'h2007_0000 | 32'(addr);
         reg_req.wdata = wdata;
         done = 1'b0;
         for (int i = 0; i < 16 && !done; i++) begin
@@ -196,7 +243,7 @@ module tb_mosaic_efpga;
         reg_req = '0;
     endtask
 
-    task automatic reg_write(input logic [3:0] addr, input logic [31:0] wdata);
+    task automatic reg_write(input logic [4:0] addr, input logic [31:0] wdata);
         logic [31:0] ignored;
         reg_access(1'b1, addr, wdata, ignored);
     endtask
@@ -457,6 +504,70 @@ module tb_mosaic_efpga;
         iso_probe = 1'b0;
     endtask
 
+    // ----------------------------------------------------------- the worker slot
+    // Give the slot a task: the descriptor at the head of the queue, then the
+    // wake pulse a push with the slot's core_hint makes. The slot is awake
+    // from the edge that takes the pulse.
+    task automatic give(input logic [31:0] desc);
+        head = desc;
+        head_pops = pops;
+        if (desc != '0) task_want = desc[31:16];
+        task_wake = 1'b1;
+        @(negedge clk);
+        task_wake = 1'b0;
+        if (task_sleep !== 1'b0) fail("slot_asleep_with_a_task");
+    endtask
+
+    task automatic pulse_park;
+        task_park = 1'b1;
+        @(negedge clk);
+        task_park = 1'b0;
+    endtask
+
+    task automatic wait_sleep(input int cycles, input string reason);
+        for (int i = 0; i < cycles && task_sleep !== 1'b1; i++) @(negedge clk);
+        if (task_sleep !== 1'b1) fail(reason);
+    endtask
+
+    task automatic expect_reg(input logic [4:0] addr, input logic [31:0] want,
+                              input string reason);
+        reg_access(1'b0, addr, '0, rdata);
+        if (rdata !== want) begin
+            $display("register %h = %h, expected %h", addr, rdata, want);
+            fail(reason);
+        end
+    endtask
+
+    // A task the design ends: taken from the queue, on the east edge until
+    // task_done, its result kept, the slot asleep again with task_valid low.
+    task automatic run_task(input logic [15:0] id, input logic [31:0] want,
+                            input string reason);
+        int seen;
+        seen = task_seen;
+        give({id, 16'h1800});
+        wait_sleep(20, reason);
+        if (dut.RAM2FAB_D_I[16*1+8+7] !== 1'b0) fail("task_valid_held_after_the_end");
+        if (task_seen == seen) fail("task_not_on_the_edge");
+        if (pops != head_pops + 1) fail("head_not_taken");
+        expect_reg(TASK, {id, 16'h1800}, reason);
+        expect_reg(RESULT, want, "task_result");
+        expect_status(CONFIGURED, reason);
+    endtask
+
+    // A task that ended without the design: `cut`, NoAnswer, the slot asleep,
+    // and the flag cleared by a 1 in its own bit only.
+    task automatic expect_cut(input logic [31:0] desc, input logic [10:0] status_want,
+                              input string reason);
+        wait_sleep(4, reason);
+        expect_reg(TASK, desc, reason);
+        expect_reg(RESULT, NO_ANSWER, reason);
+        expect_status(status_want | CUT, reason);
+        reg_write(STATUS, 32'hFFFF_FFDF);
+        expect_status(status_want | CUT, "wrong_flag_cleared");
+        reg_write(STATUS, 32'h20);
+        expect_status(status_want, "flag_not_cleared");
+    endtask
+
     initial begin
         void'($value$plusargs("fault=%s", fault));
         east_on = fault != "wdata_pin" && fault != "addr_pin";
@@ -466,6 +577,10 @@ module tb_mosaic_efpga;
         if (fault == "no_flush") force dut.flush = 1'b0;
         if (fault == "tag_ignored") force dut.tag_ok = 1'b1;
         if (fault == "frame_check_ignored") force dut.frame_ok = 1'b1;
+        if (fault == "no_park") force dut.task_park_i = 1'b0;
+        if (fault == "cut_ignored") force dut.set_cut = 1'b0;
+        if (fault == "task_result_pin") force dut.result_x = '0;
+        if (fault == "sleep_stuck") force dut.task_sleep_o = 1'b1;
         peek("silent_unload", 1, rdata, total);
         silent_tag = rdata[15:0];
         peek("regs_unload", 1, rdata, total);
@@ -518,6 +633,115 @@ module tb_mosaic_efpga;
         if (rdata !== 32'h0) fail("ignored_write_taken");
         set_control(2'b11);
         expect_tag('0, "tag_without_a_design");  // nor CONTROL
+
+        if ($test$plusargs("task_run")) begin
+        $display("[%0t] step T", $time);
+        // T. task_count as a worker of the TDU. It ends a task one cycle
+        // after it is given, with {n, task_id ^ 16'hA5A5}, n the tasks it
+        // ended since its user reset; a task with id 16'hFFFF never ends.
+        // Without a design a task is taken and cut at once.
+        mark = task_seen;
+        give(32'h0042_1800);
+        expect_cut(32'h0042_1800, IDLE, "task_without_a_design");
+        load("task");
+        expect_status(CONFIGURED, "task_not_configured");
+        set_control(2'b10);
+        repeat (4) @(negedge clk);
+        set_control(2'b00);
+        run_task(16'h1234, {16'd1, 16'h1234 ^ 16'hA5A5}, "first_task");
+        run_task(16'hBEEF, {16'd2, 16'hBEEF ^ 16'hA5A5}, "second_task");
+        // A wake with the queue empty: the slot takes 0 and sleeps again.
+        give('0);
+        wait_sleep(4, "empty_pop_kept_awake");
+        if (pops != head_pops + 1) fail("empty_pop_not_taken");
+        expect_reg(TASK, 32'hBEEF_1800, "empty_pop_changed_task");
+        expect_status(CONFIGURED, "empty_pop_cut");
+        // A pop not granted waits; parked meanwhile, the slot sleeps with
+        // nothing taken. Granted after a new wake, the task runs.
+        hold_grant = 1'b1;
+        give(32'h5555_1800);
+        repeat (10) @(negedge clk);
+        if (task_sleep !== 1'b0 || pops != head_pops) fail("pop_not_waiting");
+        pulse_park;
+        wait_sleep(4, "park_ignored");
+        expect_status(CONFIGURED, "park_while_popping_cut");
+        hold_grant = 1'b0;
+        run_task(16'h5555, {16'd3, 16'h5555 ^ 16'hA5A5}, "task_after_a_held_pop");
+        // Parked in the cycle its pop is granted: taken, and cut at once.
+        hold_grant = 1'b1;
+        mark = task_seen;
+        give(32'h0333_1800);
+        repeat (4) @(negedge clk);
+        hold_grant = 1'b0;
+        pulse_park;
+        if (pops != head_pops + 1) fail("park_at_the_pop_not_taken");
+        expect_cut(32'h0333_1800, CONFIGURED, "park_at_the_pop_ignored");
+        if (task_seen != mark) fail("park_at_the_pop_ignored");
+        // A task_done still high when a task is taken: the task waits for it
+        // to fall before task_valid rises; parked meanwhile, it is cut and
+        // never reaches the design.
+        done_probe = 1'b1;
+        give(32'h0666_1800);
+        repeat (10) @(negedge clk);
+        if (task_sleep !== 1'b0 || task_seen != mark) fail("task_given_over_a_high_done");
+        pulse_park;
+        expect_cut(32'h0666_1800, CONFIGURED, "park_ignored_while_waiting");
+        if (task_seen != mark) fail("task_given_over_a_high_done");
+        // Again, and the done falls: the task runs.
+        give(32'h0777_1800);
+        repeat (10) @(negedge clk);
+        if (task_sleep !== 1'b0 || task_seen != mark) fail("task_given_over_a_high_done");
+        done_probe = 1'b0;
+        wait_sleep(20, "task_after_a_high_done");
+        expect_reg(RESULT, {16'd4, 16'h0777 ^ 16'hA5A5}, "task_after_a_high_done");
+        expect_status(CONFIGURED, "task_after_a_high_done");
+        // A task the design never ends runs until the TDU parks the slot.
+        mark = task_seen;
+        give(32'hFFFF_1800);
+        repeat (50) @(negedge clk);
+        if (task_sleep !== 1'b0 || task_seen < mark + 40) fail("endless_task_not_running");
+        pulse_park;
+        expect_cut(32'hFFFF_1800, CONFIGURED, "park_ignored");
+        if (dut.RAM2FAB_D_I[16*1+8+7] !== 1'b0) fail("task_valid_held_after_the_park");
+        // Cut off while it runs, and given while cut off: cut at once.
+        give(32'hFFFF_1800);
+        repeat (10) @(negedge clk);
+        set_control(2'b01);
+        expect_cut(32'hFFFF_1800, CONFIGURED, "isolation_did_not_cut");
+        mark = task_seen;
+        give(32'h0099_1800);
+        expect_cut(32'h0099_1800, CONFIGURED, "task_while_isolated");
+        if (task_seen != mark) fail("task_reached_an_isolated_fabric");
+        expect_isolated("task_reached_an_isolated_fabric");
+        // While isolated, a wake with the queue empty takes nothing: no `cut`.
+        give('0);
+        wait_sleep(4, "empty_pop_kept_awake");
+        expect_status(CONFIGURED, "empty_pop_cut_while_isolated");
+        // A pop granted in the first cycle after the fabric is connected
+        // waits a cycle: a task_done the design left high while cut off
+        // shows only then. Connected without the user reset, the count goes
+        // on.
+        hold_grant = 1'b1;
+        give(32'h0ABC_1800);
+        done_pin_probe = 1'b1;
+        reg_write(CONTROL, 32'h0);
+        control = 2'b00;
+        hold_grant = 1'b0;
+        mark = task_seen;
+        repeat (10) @(negedge clk);
+        if (task_sleep !== 1'b0 || task_seen != mark) fail("task_given_at_the_connection");
+        done_pin_probe = 1'b0;
+        wait_sleep(20, "task_after_the_connection");
+        expect_reg(RESULT, {16'd5, 16'h0ABC ^ 16'hA5A5}, "task_after_the_connection");
+        expect_status(CONFIGURED, "task_after_the_connection");
+        run_task(16'h0099, {16'd6, 16'h0099 ^ 16'hA5A5}, "task_after_reconnect");
+        // The design has run: its unload removes it, and a task is cut again.
+        unload("task_unload");
+        give(32'h0042_1800);
+        expect_cut(32'h0042_1800, IDLE, "task_after_the_unload");
+        $display("TB PASS design=task words=%0d fault=%0s", words, fault);
+        $finish;
+        end
 
         if ($test$plusargs("silent_run")) begin
         $display("[%0t] step 3", $time);

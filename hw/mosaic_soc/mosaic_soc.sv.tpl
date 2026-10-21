@@ -274,6 +274,22 @@ module mosaic_soc
   reg_rsp_t efpga_reg_rsp;
   obi_req_t efpga_win_req;
   obi_resp_t efpga_win_resp;
+  // and its worker slot, the TDU's last (EFPGA_TDU_SLOT)
+  logic efpga_task_wake, efpga_task_park, efpga_task_sleep, efpga_task_pop, efpga_task_pop_gnt;
+  logic [31:0] efpga_task_pop_data;
+% if tdu_enabled:
+  logic [mosaic_soc_pkg::TDU_SLOTS-1:0] tdu_slot_sleep, tdu_slot_wake, tdu_slot_park;
+  assign tdu_slot_sleep = {efpga_task_sleep, core_sleep};
+  assign core_wake = tdu_slot_wake[NRHARTS-1:0];
+  assign core_park = tdu_slot_park[NRHARTS-1:0];
+  assign efpga_task_wake = tdu_slot_wake[mosaic_soc_pkg::EFPGA_TDU_SLOT];
+  assign efpga_task_park = tdu_slot_park[mosaic_soc_pkg::EFPGA_TDU_SLOT];
+% else:
+  assign efpga_task_wake = 1'b0;
+  assign efpga_task_park = 1'b0;
+  assign efpga_task_pop_gnt = 1'b0;
+  assign efpga_task_pop_data = '0;
+% endif
 % endif
 
   // rv_timer
@@ -690,11 +706,22 @@ module mosaic_soc
 % if tdu_enabled:
       ,
       // MOSAIC TDU
+% if efpga:
+      .tdu_core_running_i(~tdu_slot_sleep),
+      .tdu_core_sleep_i(tdu_slot_sleep),
+      .tdu_core_wake_o(tdu_slot_wake),
+      .tdu_core_park_o(tdu_slot_park),
+      .tdu_irq_o(tdu_irq),
+      .tdu_hw_pop_req_i(efpga_task_pop),
+      .tdu_hw_pop_gnt_o(efpga_task_pop_gnt),
+      .tdu_hw_pop_data_o(efpga_task_pop_data)
+% else:
       .tdu_core_running_i(core_running),
       .tdu_core_sleep_i(core_sleep),
       .tdu_core_wake_o(core_wake),
       .tdu_core_park_o(core_park),
       .tdu_irq_o(tdu_irq)
+% endif
 % endif
   );
 
@@ -714,6 +741,12 @@ module mosaic_soc
       .reg_rsp_o(efpga_reg_rsp),
       .obi_req_i(efpga_win_req),
       .obi_resp_o(efpga_win_resp),
+      .task_wake_i(efpga_task_wake),
+      .task_park_i(efpga_task_park),
+      .task_sleep_o(efpga_task_sleep),
+      .task_pop_o(efpga_task_pop),
+      .task_pop_gnt_i(efpga_task_pop_gnt),
+      .task_pop_data_i(efpga_task_pop_data),
       // Pad k of the fabric is an option of the pad that carries gpio_k
       // (configs/pad_cfg.py), which pad_control gives to the fabric on request.
       .pad_in_i({${", ".join(f"efpga_pad_{k}_i" for k in reversed(range(efpga["pads"])))}}),

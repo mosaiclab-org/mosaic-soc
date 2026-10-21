@@ -736,6 +736,9 @@ def _memory_map_header(
                 f"#define MOSAIC_EFPGA_WINDOW_SIZE {_hex32(EFPGA_WINDOW_SIZE)}u",
             ]
         )
+        if cfg.scheduler.tdu:
+            # The fabric is the TDU's worker slot after the harts.
+            lines.append(f"#define MOSAIC_EFPGA_TDU_SLOT {len(cfg.harts)}u")
     if efpga_pad_mux:
         # efpga_pad_mux(): pad_control's register of each of the fabric's pads,
         # and the value that gives the pad to the fabric (0: to the GPIO).

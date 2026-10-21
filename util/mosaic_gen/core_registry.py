@@ -1210,6 +1210,12 @@ def validate_soc_config(cfg: Any, allow_sim_only: bool = True) -> List[str]:
             f"MOSAIC platform services support at most 16 harts, "
             f"configuration has {total_cores}"
         )
+    elif soc.get("efpga") is not None and tdu_enabled and total_cores > 15:
+        # hw/efpga/mosaic_efpga.sv: the fabric is the TDU's slot after the harts.
+        errors.append(
+            f"soc.efpga takes the TDU's last worker slot: at most 15 harts with "
+            f"scheduler.tdu, configuration has {total_cores}"
+        )
 
     peripherals = soc.get("peripherals", [])
     if not isinstance(peripherals, list):

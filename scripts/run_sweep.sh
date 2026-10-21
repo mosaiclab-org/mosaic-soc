@@ -66,6 +66,7 @@ STEPS=(
   "efpga_floonoc|^### RESULT: EXIT SUCCESS.* with shell_regs.v in its eFPGA, checked by shell_regs_test.c, warm reboots: 0 |MOSAIC_CFG=configs/mosaic_efpga_demo_floonoc.yaml EFPGA_DESIGN=tb/efpga/shell_regs.v EFPGA_TEST=tb/efpga/shell_regs_test.c tb/mosaic_soc/run_fw.sh"
   "efpga_serv|^### RESULT: EXIT SUCCESS.* with shell_regs.v in its eFPGA, checked by shell_regs_test.c, warm reboots: 0 |MOSAIC_CFG=configs/mosaic_efpga_serv.yaml EFPGA_DESIGN=tb/efpga/shell_regs.v EFPGA_TEST=tb/efpga/shell_regs_test.c tb/mosaic_soc/run_fw.sh"
   "efpga_medium|^### RESULT: EXIT SUCCESS.* with shell_regs.v in its eFPGA, checked by shell_regs_test.c, warm reboots: 0 |MOSAIC_CFG=configs/mosaic_efpga_medium.yaml EFPGA_DESIGN=tb/efpga/shell_regs.v EFPGA_TEST=tb/efpga/shell_regs_test.c tb/mosaic_soc/run_fw.sh"
+  "efpga_task|^### RESULT: EXIT SUCCESS.* with task_count.v in its eFPGA, checked by task_count_test.c, warm reboots: 0 |MOSAIC_CFG=configs/mosaic_efpga_demo.yaml EFPGA_DESIGN=tb/efpga/task_count.v EFPGA_TEST=tb/efpga/task_count_test.c tb/mosaic_soc/run_fw.sh"
   "efpga_synth|^SYNTH PASS preset=small |flow/librelane/scripts/efpga_synth.sh small"
 
   "wake_obi|$EXIT_OK|tb/mosaic_soc/run.sh"

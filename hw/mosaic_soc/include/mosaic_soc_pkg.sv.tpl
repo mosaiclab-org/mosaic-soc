@@ -145,6 +145,12 @@ package mosaic_soc_pkg;
   localparam logic[31:0] TDU_START_ADDRESS = AO_PERIPHERAL_START_ADDRESS + 32'h000A0000;
   localparam logic[31:0] TDU_SIZE          = 32'h00001000;  // 4 KB window
   localparam logic[31:0] TDU_END_ADDRESS   = TDU_START_ADDRESS + TDU_SIZE;
+% if efpga:
+  // The eFPGA is the TDU's last worker slot, after the harts
+  // (hw/efpga/mosaic_efpga.sv).
+  localparam int unsigned EFPGA_TDU_SLOT = NUM_HARTS;
+  localparam int unsigned TDU_SLOTS = NUM_HARTS + 1;
+% endif
 
 % endif
   localparam logic[31:0] PERIPHERAL_START_ADDRESS = 32'h${hex(user_peripheral_domain.get_start_address())[2:]};

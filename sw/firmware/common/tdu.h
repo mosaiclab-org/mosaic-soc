@@ -34,7 +34,7 @@ extern "C" {
  */
 typedef struct {
     uint16_t task_id;    /**< Software-defined task identifier. */
-    uint8_t  core_hint;  /**< Target hart index (0..NUM_HARTS-1). */
+    uint8_t  core_hint;  /**< Target slot: a hart, or MOSAIC_EFPGA_TDU_SLOT. */
     uint8_t  prio;       /**< Task priority (0=highest). */
 } tdu_task_t;
 

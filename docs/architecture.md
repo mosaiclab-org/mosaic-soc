@@ -141,6 +141,12 @@ The task queue holds eight descriptors. A descriptor carries a task identifier,
 a priority and a `core_hint` naming the hart that should run it. Software on the
 TITAN chooses the target; the hardware preserves the choice.
 
+With `soc.efpga` the TDU has one more worker slot after the harts, the eFPGA's
+(`EFPGA_TDU_SLOT`). A push with that `core_hint` wakes the eFPGA wrapper, which
+takes the descriptor through a port of the TDU instead of `TASK_POP`, hands its
+task identifier to the user design and sleeps again when the design ends the
+task ([efpga.md](efpga.md#as-a-worker-of-the-tdu)).
+
 ### Interrupt controllers
 
 - `mosaic_clint` (`hw/tdu/rtl/mosaic_clint.sv`) gives each hart one software
@@ -151,7 +157,8 @@ TITAN chooses the target; the hardware preserves the choice.
   regenerates it for the number of harts in the configuration. `soc.plic: false`
   removes it, which leaves peripheral interrupts with no route to a hart.
 
-The platform services (PLIC, debug, TDU) support at most 16 harts.
+The platform services (PLIC, debug, TDU) support at most 16 harts, 15 when
+the eFPGA takes a slot of the TDU.
 
 ### DMA
 

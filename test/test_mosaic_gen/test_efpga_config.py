@@ -163,6 +163,35 @@ def test_the_templates_put_the_wrapper_in_the_soc():
     assert ".efpga_req_o(efpga_reg_req)" in top
 
 
+def test_the_fabric_is_the_tdu_slot_after_the_harts():
+    kwargs = _kwargs(DEMO)
+    package = _render("hw/mosaic_soc/include/mosaic_soc_pkg.sv.tpl", kwargs)
+    ao = _render("hw/mosaic_soc/ao_peripheral_subsystem.sv.tpl", kwargs)
+    top = _render("hw/mosaic_soc/mosaic_soc.sv.tpl", kwargs)
+    assert "EFPGA_TDU_SLOT = NUM_HARTS;" in package and "TDU_SLOTS = NUM_HARTS + 1;" in package
+    assert ".NUM_HARTS(mosaic_soc_pkg::TDU_SLOTS)" in ao
+    assert ".hw_pop_req_i   (tdu_hw_pop_req_i)" in ao
+    assert "assign tdu_slot_sleep = {efpga_task_sleep, core_sleep};" in top
+    assert "assign core_wake = tdu_slot_wake[NRHARTS-1:0];" in top
+    instance = re.search(r"mosaic_efpga #\(.*?\) mosaic_efpga_i \((.*?)\);", top, re.S).group(1)
+    for port in (".task_wake_i(efpga_task_wake)", ".task_pop_o(efpga_task_pop)",
+                 ".task_pop_data_i(efpga_task_pop_data)"):
+        assert port in instance
+    header = software_gen._memory_map_header(load_mosaic_yaml(DEMO), 0x3000, 0x200)
+    assert "#define MOSAIC_EFPGA_TDU_SLOT 3u\n" in header  # harts 0 to 2
+    # Without the key the TDU has a slot per hart and pops for none.
+    ao = _render("hw/mosaic_soc/ao_peripheral_subsystem.sv.tpl", _kwargs(PLAIN))
+    assert ".NUM_HARTS(mosaic_soc_pkg::NUM_HARTS)" in ao and ".hw_pop_req_i   (1'b0)" in ao
+
+
+@pytest.mark.parametrize("harts, refused", [(15, False), (16, True)])
+def test_with_the_tdu_the_fabric_leaves_slots_for_15_harts(harts, refused):
+    cfg = _demo()
+    cfg["soc"]["cores"][2]["count"] = harts - 2
+    errors = [e for e in validate_soc_config(cfg) if "TDU's last worker slot" in e]
+    assert bool(errors) == refused
+
+
 def test_without_the_key_the_templates_name_no_efpga():
     kwargs = _kwargs(PLAIN)
     for path in ("hw/mosaic_soc/include/mosaic_soc_pkg.sv.tpl", "hw/mosaic_soc/system_bus.sv.tpl",
