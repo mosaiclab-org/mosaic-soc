@@ -285,15 +285,16 @@ def tag_lines(tag, features):
         bit for check in checks for k, bit in enumerate(check) if not tag >> k & 1]
 
 
-# The shell of the preset `small` (docs/efpga.md): the ports a design bound by a
-# generated top_wrapper may have, each with its direction and width. A design
-# has any of them and no other. addr is the word address (byte address [9:2]),
-# be its byte enables; io_* are the pads, io_oeb low driving one.
+# The shell (docs/efpga.md): the ports a design bound by a generated
+# top_wrapper may have, each with its direction and width. A design has any of
+# them and no other. addr is the word address (byte address [9:2]), be its
+# byte enables; io_* are the pads, io_oeb low driving one, as many as the
+# design binds of the preset's two per row (width None).
 SHELL = {
     "clk": ("input", 1), "rst_n": ("input", 1), "valid": ("input", 1), "we": ("input", 1),
     "be": ("input", 4), "addr": ("input", 8), "wdata": ("input", 32),
     "ack": ("output", 1), "rdata": ("output", 32),
-    "io_in": ("input", 8), "io_out": ("output", 8), "io_oeb": ("output", 8),
+    "io_in": ("input", None), "io_out": ("output", None), "io_oeb": ("output", None),
 }
 CTL = ["valid", "we", "rst_n"] + [f"be[{k}]" for k in range(4)] + [f"addr[{k}]" for k in range(8)]
 
@@ -318,7 +319,7 @@ def _shell_pins(geometry):
         row, n = divmod(bit, 8)
         pins[name] = (f"{east}{rows - row}.RAM2FAB_D{2 + n // 4}",
                       "InPass4_frame_config_mux", f"O{n % 4}")
-    for pad in range(8):
+    for pad in range(2 * rows):
         bel = f"X0Y{rows - pad // 2}.{'AB'[pad % 2 == 0]}"
         for port, pin in (("io_in", "O"), ("io_out", "I"), ("io_oeb", "T")):
             pins[f"{port}[{pad}]"] = (bel, "IO_1_bidirectional_frame_config_pass", pin)
@@ -329,23 +330,26 @@ def shell_wrapper(module, ports, geometry):
     """The top_wrapper that binds ``module``, whose ``ports`` are {name:
     (direction, width)}, to the edges of the fabric through the shell. Without
     ack, the shell holds it low (the wrapper's timeout answers); without
-    io_oeb, it holds every pad released: an unbound output of the fabric
-    would follow whatever its default route carries."""
+    io_oeb, it holds every pad released, and every pad beyond its width: an
+    unbound output of the fabric would follow whatever its default route
+    carries."""
+    pads = 2 * geometry["rows"]
     for name, (direction, width) in ports.items():
-        if SHELL.get(name) != (direction, width):
+        expected = SHELL.get(name, (None, 0))
+        if expected[0] != direction or (width != expected[1] if expected[1] else width > pads):
             raise RuntimeError(
                 f"{module}: port {name} ({direction}, {width} bits) is not in the shell: "
-                + ", ".join(f"{d} {n}[{w - 1}:0]" for n, (d, w) in SHELL.items()))
-    if ("io_out" in ports) != ("io_oeb" in ports):
-        raise RuntimeError(f"{module}: io_out and io_oeb go together")
+                + ", ".join(f"{d} {n}[{(w or pads) - 1}:0]" for n, (d, w) in SHELL.items()))
+    if ports.get("io_out", (0, 0))[1] != ports.get("io_oeb", (0, 0))[1]:
+        raise RuntimeError(f"{module}: io_out and io_oeb go together, as wide")
     pins, cells = _shell_pins(geometry), {}
     for name, (_, width) in ports.items():
         for bit in range(width):
             signal = f"{name}[{bit}]" if width > 1 else name
-            bel, cell, pin = pins[signal]
+            bel, cell, pin = pins[f"{name}[{bit}]" if signal not in pins else signal]
             cells.setdefault((bel, cell), []).append(f".{pin}({signal})")
     held = [] if "ack" in ports else [("ack", "1'b0")]
-    held += [] if "io_oeb" in ports else [(f"io_oeb[{pad}]", "1'b1") for pad in range(8)]
+    held += [(f"io_oeb[{pad}]", "1'b1") for pad in range(ports.get("io_oeb", (0, 0))[1], pads)]
     for signal, value in held:
         bel, cell, pin = pins[signal]
         cells.setdefault((bel, cell), []).append(f".{pin}({value})")
@@ -539,6 +543,14 @@ def _compile(proj, geometry, inst, out, designs, env, files, label):
             Path(f"{name}.hex").write_text("".join(f"{word:08x}\n" for word in stream))
         files += [Path(f"{stem}{ext}") for ext in (".bin", ".hex", ".unload.bin", ".unload.hex")]
     return tags
+
+
+def preset_pads(preset):
+    """The pads of a preset (configs/efpga/<preset>.csv): two per W_IO tile of
+    its west edge."""
+    text = re.sub(r"#.*", "", Path(preset).read_text())
+    grid = text.split("FabricBegin", 1)[1].split("FabricEnd", 1)[0]
+    return 2 * sum(line.split(",")[0].strip() == "W_IO" for line in grid.splitlines())
 
 
 def soc_fabric(preset, out):

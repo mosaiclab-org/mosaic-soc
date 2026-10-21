@@ -347,7 +347,7 @@ FLASH_XIP_SIZE = 0x0100_0000
 # is configs/efpga/<name>.csv.
 EFPGA_WINDOW_BASE = 0x5000_0000
 EFPGA_WINDOW_SIZE = 0x0000_1000
-VALID_EFPGA_PRESETS = frozenset({"small"})
+VALID_EFPGA_PRESETS = frozenset({"small", "medium"})
 TAPEOUT_CORE_MATRIX = (
     {
         "ip": "serv",

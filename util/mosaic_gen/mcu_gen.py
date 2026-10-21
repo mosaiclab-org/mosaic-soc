@@ -360,6 +360,9 @@ def main():
 
         efpga_out = generated_root / "efpga"
         geometry = efpga_gen.soc_fabric(efpga["preset"], efpga_out)["geometry"]
+        if efpga["pads"] != 2 * geometry["rows"]:  # configs/pad_cfg.py counted them
+            parser.error(f"preset {efpga['preset']}: {efpga['pads']} pads in its csv, "
+                         f"{geometry['rows']} rows in its fabric")
         kwargs["xheep"].add_extension("efpga", {**efpga, **geometry})
         sources = (efpga_out / "fabric.f").read_text().split()
         for output in [efpga_out / "soc.f", efpga_out / "efpga_inst.vh",

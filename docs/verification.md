@@ -19,7 +19,7 @@ The simulated program reaches this by writing an exit value of zero to the SoC
 controller, through the real bus. The `mosaic flow-runner` command requires the
 marker at the start of a line and treats its absence as a failure even when the
 process exits 0. The regression sweep requires exit status 0 and the marker; for
-the full-SoC steps other than the five eFPGA ones its marker also matches the
+the full-SoC steps other than the six eFPGA ones its marker also matches the
 line a runner prints on failure, so there the exit status decides.
 
 ## Testbench tiers under `tb/`
@@ -51,7 +51,7 @@ of the whole SoC inside X-HEEP's test harness, and runs it.
 | `run_generic.sh` | `tb-soc-generic` | Works for any configuration. Reads the generated `boot_images.json`, builds one liveness image per boot slot, wakes every worker through the TDU, and prints `EXIT SUCCESS` only after every configured hart has written its own value `hart + 1` to its sentinel word. |
 | `run.sh` | `tb-soc-wake` | The three-hart wake demonstration: the `titan` boots from the boot ROM, wakes two workers through the TDU, each worker runs its own program and reports. |
 | `run_titan.sh` | `tb-soc-titan` | Four `titan` harts as a symmetric multiprocessor running one program that branches on the hart identifier. |
-| `run_fw.sh` | `tb-soc-fw` | The deployable firmware image on the default seven-hart design, loaded only through the SPI flash model: boot ROM hand-off, execution in place, worker image copy with checksum, TDU dispatch. With `EFPGA_DESIGN=<design>.v`, on a design with `soc.efpga`, the user design compiled for the fabric and loaded at cold boot, and with `EFPGA_TEST=<test>.c` the user's C check of it; with `WARM_REBOOTS=1` again after a reset that keeps power, through its unload (sweep step `efpga_design`, with `tb/efpga/shell_regs.v` and `shell_regs_test.c`, and without a reboot on the LOG and FlooNoC buses and with a SERV hart 0, `efpga_log`, `efpga_floonoc` and `efpga_serv`; [efpga.md](efpga.md#a-users-design)). |
+| `run_fw.sh` | `tb-soc-fw` | The deployable firmware image on the default seven-hart design, loaded only through the SPI flash model: boot ROM hand-off, execution in place, worker image copy with checksum, TDU dispatch. With `EFPGA_DESIGN=<design>.v`, on a design with `soc.efpga`, the user design compiled for the fabric and loaded at cold boot, and with `EFPGA_TEST=<test>.c` the user's C check of it; with `WARM_REBOOTS=1` again after a reset that keeps power, through its unload (sweep step `efpga_design`, with `tb/efpga/shell_regs.v` and `shell_regs_test.c`, and without a reboot on the LOG and FlooNoC buses with a SERV hart 0 and on the 8x8 preset, `efpga_log`, `efpga_floonoc`, `efpga_serv` and `efpga_medium`; [efpga.md](efpga.md#a-users-design)). |
 | `run_uart.sh` | (sweep only) | The UART of a design whose only peripheral is the UART. |
 | `run_efpga.sh` | (sweep only) | The wake-demonstration SoC generated with `soc.efpga`: hart 0 loads a bitstream through the wrapper's registers, uses the user design in its window, unloads it and loads it again; then the production firmware boots from flash past a stream its loader refuses, and into a user's check that must report its value. Seven firmware runs, five of which must fail with a named exit value ([efpga.md](efpga.md)). |
 
@@ -72,9 +72,9 @@ Python suite and gate-level simulation.
 
 `scripts/run_sweep.sh` runs every suite in sequence: the Python suite, the
 `tb-matrix` validation tier, the subsystem benches, the wrapper benches, the
-seven eFPGA steps, the wake demonstration on each fabric and for each wrapped
+eight eFPGA steps, the wake demonstration on each fabric and for each wrapped
 core, the multiprocessor demonstration on each fabric, the firmware run, and
-the Block A checks including gate-level simulation. It has 40 steps. Each step
+the Block A checks including gate-level simulation. It has 41 steps. Each step
 has a success marker that must appear in its log, and the script exits
 non-zero if any step fails.
 
@@ -167,7 +167,7 @@ The suite covers configuration validation, template rendering, the software
 layout, the harness gates, the physical models, the evidence parsers, and the
 eFPGA generator's tool pins, PDK isolation and frame order (with fake tools:
 no test runs FABulous). The
-measured result on this tree is **1825 passed and 102 skipped**. Most skipped
+measured result on this tree is **1842 passed and 103 skipped**. Most skipped
 tests need hardening run trees or a PDK clone that are not in version control.
 One is skipped when no `riscv64-unknown-elf-gcc` is on the host, and
 `test_socview.py` adds one test per bundle under `build/mosaic/` whose

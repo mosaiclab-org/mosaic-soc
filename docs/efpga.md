@@ -14,7 +14,7 @@ firmware loads it, unloads it and loads it again. The configuration key
 
 | Part | File |
 |---|---|
-| The fabric preset `small` | `configs/efpga/small.csv` |
+| The fabric presets `small` (4x4) and `medium` (8x8) | `configs/efpga/small.csv`, `configs/efpga/medium.csv` |
 | The generator, which runs FABulous, Yosys, nextpnr and `bit_gen` | `util/mosaic_gen/efpga_gen.py` |
 | The tool shell | `nix develop .#efpga` (`flake.nix`, `util/efpga-requirements.txt`) |
 | The wrapper: loader and unload, isolation, bus timeout | `hw/efpga/mosaic_efpga.sv` |
@@ -25,7 +25,7 @@ firmware loads it, unloads it and loads it again. The configuration key
 | The firmware and the runner of the SoC test | `tb/mosaic_soc/prog_efpga/`, `tb/mosaic_soc/run_efpga.sh` |
 | The regression steps | `efpga_fabric`, `efpga_wrapper`, `efpga_soc`, `efpga_design`, `efpga_log`, `efpga_floonoc`, `efpga_serv` in `scripts/run_sweep.sh` |
 
-What does not exist: a second preset and a layout. The wake demonstration with the
+What does not exist: a layout. The wake demonstration with the
 fabric has been simulated on each of the three buses, and the wrapper was
 never synthesised. A design is replaced through its unload stream; `clear` does not
 remove a design that has run safely, and a reset keeps it ([Limits](#limits)).
@@ -42,6 +42,15 @@ ships in its project template.
 | Pads | 8 bidirectional pads on the west edge |
 | East edge | 4 `RAM_IO` tiles: 64 inputs, 112 outputs and 16 configuration outputs. The bench of the fabric leaves them unused; the wrapper uses 47 inputs and 33 outputs |
 | Configuration | 6,696 latches; a bitstream has 80 frames, one per strobe line, and is 1,624 bytes |
+
+`configs/efpga/medium.csv` is the same tiles in 8 logic rows of `W_IO`, six
+`LUT4AB` and `RAM_IO`: 384 LUT4, 16 pads, and a bitstream of 160 frames and
+5,784 bytes, whose streams have 2,343 words to load and 1,964 to unload. The
+wrapper, the shell, the pads and the loader take their sizes from the
+generated fabric; the bus of the user window still uses the four rows of the
+east edge nearest Y`<rows>`. Only the SoC step `efpga_medium` runs it: the
+benches of the fabric and of the wrapper, and the test designs with their own
+top_wrapper, are for `small`.
 
 ## Generating a fabric and bitstreams
 
@@ -105,7 +114,7 @@ With this key the generator puts the wrapper and the fabric of the preset in
 | The registers (`BITSTREAM`, `STATUS`, `CONTROL`, `TAG`) | `0x200C_0000`: the always-on peripheral `efpga` of `configs/general.hjson` |
 | The user window | `0x5000_0000`, 4 KB: a slave of the system crossbar |
 | The fabric | `<bundle>/generated/efpga/`: `efpga_gen.py` without designs |
-| The pads | pad `k` of the fabric is the last option of the pad of `gpio_k`, for `k` 0 to 7 (`configs/pad_cfg.py`); `pad_control` gives it to the fabric only on request |
+| The pads | two per row of the preset, 8 for `small` and 16 for `medium`: pad `k` of the fabric is the last option of the pad that carries `gpio_k` (`configs/pad_cfg.py`); `pad_control` gives it to the fabric only on request |
 | The addresses, for firmware | `MOSAIC_EFPGA_BASE`, `MOSAIC_EFPGA_WINDOW_BASE` and `MOSAIC_EFPGA_WINDOW_SIZE` in `mosaic_memory_map.h`, with `MOSAIC_EFPGA_PADS` and the `pad_control` register and value of each pad; `MOSAIC_ASM_EFPGA_BASE` and `MOSAIC_ASM_EFPGA_WINDOW_BASE` in `mosaic_memory_map.inc` |
 
 The always-on domain is neither clock-gated nor power-gated. The wrapper takes
@@ -181,8 +190,12 @@ named after its file, with any of these ports and no other.
 | `rst_n` | input | the user reset, low while `CONTROL` holds it and while the fabric is cut off |
 | `valid`, `we`, `be[3:0]`, `addr[7:0]`, `wdata[31:0]` | input | a request of the user window: `addr` is the word address, byte address `[9:2]` |
 | `ack`, `rdata[31:0]` | output | its answer, in the handshake [the wrapper](#the-wrapper) describes |
-| `io_in[7:0]` | input | the pads, 0 from each pad firmware has not given to the fabric |
-| `io_out[7:0]`, `io_oeb[7:0]` | output | the pads, `io_oeb` low driving one; the two go together |
+| `io_in` | input | the pads, 0 from each pad firmware has not given to the fabric |
+| `io_out`, `io_oeb` | output | the pads, `io_oeb` low driving one; the two go together, as wide |
+
+The pads of the shell are as wide as the design wants, up to the preset's: 8
+for `small`, 16 for `medium`; pad `k` is bit `k`. Every pad beyond the
+design's `io_oeb` is held released.
 
 `efpga_gen.py --shell <design>.v` reads the ports with Yosys and writes the
 top_wrapper, `<design>.shell.v`, which puts each port bit on the cell and pin
@@ -664,7 +677,12 @@ reading code, worker images and the stream from the SPI flash model takes most
 of a boot. Measured on 2026-10-21, each step alone on the machine: `efpga_soc`
 took 894 s with its seven runs, `efpga_design` 1,012 s with its two boots (warm
 reboot at 29.0 ms), `efpga_log` 705 s, `efpga_floonoc` 662 s and `efpga_serv`
-684 s; the Verilator build of the SoC with the fabric took 138 s and
+684 s; `efpga_medium` took 8,939 s on 2026-10-21: its boot ends at 45 ms,
+and the model with the 8x8 fabric runs at 5.4 µs of simulated time per
+second, about 15 times slower than with `small`. Built with Verilator's
+`--threads 3` on this four-core machine it was slower still: 200,000 cycles
+had not ended after 587 s, against 343 s with one thread; the Verilator build of the
+SoC with the fabric took 138 s and
 1.1 GB on 2026-10-17. The wrapper step took 1,009 s with its 50 runs, and the
 fabric step 91 s.
 

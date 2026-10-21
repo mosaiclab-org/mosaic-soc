@@ -79,11 +79,11 @@ def test_the_demo_validates_and_omitting_the_key_is_valid():
 @pytest.mark.parametrize(
     "value, error",
     [
-        ({"preset": "big"}, "soc.efpga.preset 'big' not in ['small']"),
-        ({}, "soc.efpga.preset None not in ['small']"),
+        ({"preset": "big"}, "soc.efpga.preset 'big' not in ['medium', 'small']"),
+        ({}, "soc.efpga.preset None not in ['medium', 'small']"),
         ({"preset": "small", "pads": 8}, "soc.efpga.pads: unknown key"),
         ("small", "soc.efpga must be a mapping"),
-        ({"preset": ["small"]}, "soc.efpga.preset ['small'] not in ['small']"),
+        ({"preset": ["small"]}, "soc.efpga.preset ['small'] not in ['medium', 'small']"),
     ],
 )
 def test_a_wrong_value_is_refused_by_name(value, error):
@@ -345,3 +345,17 @@ def test_the_software_names_each_pad_mux_and_the_wrapper_reaches_the_pads():
     top = _render("hw/mosaic_soc/mosaic_soc.sv.tpl", kwargs)
     assert ".pad_in_i({efpga_pad_7_i, " in top and "efpga_pad_0_oe_o})" in top
     assert "output logic efpga_pad_0_oe_o," in top
+
+
+def test_the_medium_preset_has_16_pads_on_the_pads_of_gpio_0_to_15():
+    path = REPO / "configs" / "mosaic_efpga_medium.yaml"
+    assert validate_soc_config(yaml.safe_load(path.read_text())) == []
+    xheep = _kwargs(path)["xheep"]
+    assert xheep.get_extension("efpga")["pads"] == 16
+    owner = {pin.name: [p.name for p in pad.pins] for pad in xheep.get_padring().pad_list
+             for pin in pad.pins}
+    for k in range(16):
+        assert owner[f"efpga_pad_{k}"][-1] == f"efpga_pad_{k}"
+        assert f"gpio_{k}" in owner[f"efpga_pad_{k}"]
+    assert owner["efpga_pad_14"][0] == "spi_slave_sck"  # the pad of gpio_14 is the SPI slave's
+    assert len(software_gen.efpga_pad_mux(xheep)) == 16

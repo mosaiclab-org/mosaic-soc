@@ -36,7 +36,9 @@ try:
         expanded_user_peripherals,
         validate_soc_config,
     )
+    from . import efpga_gen
 except ImportError:  # mcu_gen adds util/mosaic_gen directly to sys.path
+    import efpga_gen
     from core_registry import (
         CORE_SPECS,
         EFPGA_WINDOW_BASE,
@@ -532,7 +534,14 @@ def mosaic_to_xheep_kwargs(
     system.add_extension(
         "efpga",
         cfg.efpga
-        and {**cfg.efpga, "window_base": EFPGA_WINDOW_BASE, "window_size": EFPGA_WINDOW_SIZE},
+        and {
+            **cfg.efpga,
+            "window_base": EFPGA_WINDOW_BASE,
+            "window_size": EFPGA_WINDOW_SIZE,
+            "pads": efpga_gen.preset_pads(
+                _resolve_repo_path(f"configs/efpga/{cfg.efpga['preset']}.csv")
+            ),
+        },
     )
     pad_path = _resolve_repo_path(pads_cfg_path)
     try:

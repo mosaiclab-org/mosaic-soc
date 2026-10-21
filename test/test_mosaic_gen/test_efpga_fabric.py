@@ -333,6 +333,13 @@ def test_a_fabric_with_a_cell_the_frame_order_does_not_cover_gets_no_bitstream(t
 # ── the shell: a top_wrapper generated from a design's ports ─────────
 
 SMALL = {"rows": 4, "cols": 4, "frame_bits_per_row": 32, "max_frames_per_col": 20}
+MEDIUM = {"rows": 8, "cols": 8, "frame_bits_per_row": 32, "max_frames_per_col": 20}
+
+
+def _all_ports(geometry):
+    """Every port of the shell, the pads as wide as the preset has them."""
+    return {name: (direction, width or 2 * geometry["rows"])
+            for name, (direction, width) in efpga_gen.SHELL.items()}
 INSTANCE = re.compile(r'\(\* keep(?:, BEL="([^"]*)")? \*\) (\w+) \w+ \((.*)\);')
 
 
@@ -369,20 +376,26 @@ def test_the_shell_binds_every_signal_where_the_tested_wrappers_do():
         "io_oeb": ("output", 8)}, SMALL)) == pads
 
 
-def test_the_whole_shell_uses_each_pin_once():
-    shell = _pins(efpga_gen.shell_wrapper("all", dict(efpga_gen.SHELL), SMALL))
-    assert len(shell) == sum(width for _, width in efpga_gen.SHELL.values())
+@pytest.mark.parametrize("geometry", [SMALL, MEDIUM])
+def test_the_whole_shell_uses_each_pin_once(geometry):
+    ports = _all_ports(geometry)
+    shell = _pins(efpga_gen.shell_wrapper("all", ports, geometry))
+    assert len(shell) == sum(width for _, width in ports.values())
     assert len(set(shell.values())) == len(shell)
-    assert "all top_i (.clk(clk), .rst_n(rst_n)" in efpga_gen.shell_wrapper(
-        "all", dict(efpga_gen.SHELL), SMALL)
+    assert "all top_i (.clk(clk), .rst_n(rst_n)" in efpga_gen.shell_wrapper("all", ports, geometry)
 
 
 def test_the_shell_holds_ack_low_and_the_pads_released_when_unbound():
     held = efpga_gen.shell_wrapper("leds", {"clk": ("input", 1)}, SMALL)
     assert held.count(".T(1'b1)") == 8
     assert held.count(".I0(1'b0)") == 1 and '"X3Y4.FAB2RAM_C"' in held
-    bound = efpga_gen.shell_wrapper("all", dict(efpga_gen.SHELL), SMALL)
+    bound = efpga_gen.shell_wrapper("all", _all_ports(SMALL), SMALL)
     assert "1'b" not in bound
+    # On the 16 pads of `medium`, a design that drives 8 leaves the other 8 released.
+    narrow = efpga_gen.shell_wrapper("leds", {"io_out": ("output", 8), "io_oeb": ("output", 8)},
+                                     MEDIUM)
+    assert narrow.count(".T(1'b1)") == 8 and narrow.count(".T(io_oeb[") == 8
+    assert '"X0Y8.B"' in narrow and '"X0Y1.A"' in narrow  # pad 0, pad 15
 
 
 @pytest.mark.parametrize("ports, error", [
@@ -390,6 +403,8 @@ def test_the_shell_holds_ack_low_and_the_pads_released_when_unbound():
     ({"addr": ("input", 30)}, "port addr .* is not in the shell"),
     ({"ack": ("input", 1)}, "port ack .* is not in the shell"),
     ({"io_out": ("output", 8)}, "io_out and io_oeb go together"),
+    ({"io_out": ("output", 8), "io_oeb": ("output", 4)}, "io_out and io_oeb go together"),
+    ({"io_in": ("input", 9)}, "port io_in .* is not in the shell"),
 ])
 def test_a_port_outside_the_shell_is_refused(ports, error):
     with pytest.raises(RuntimeError, match=f"^mine: {error}"):
