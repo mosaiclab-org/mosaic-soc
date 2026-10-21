@@ -527,6 +527,13 @@ def mosaic_to_xheep_kwargs(
         _override_memory_for_log(system, cfg)
 
     # ── 4. Pad ring ──
+    # configs/pad_cfg.py gives the eFPGA's pads their pins; mcu_gen adds the
+    # geometry of the generated fabric before rendering.
+    system.add_extension(
+        "efpga",
+        cfg.efpga
+        and {**cfg.efpga, "window_base": EFPGA_WINDOW_BASE, "window_size": EFPGA_WINDOW_SIZE},
+    )
     pad_path = _resolve_repo_path(pads_cfg_path)
     try:
         pad_ring = load_config.load_pad_cfg(pad_path, system)
@@ -550,12 +557,6 @@ def mosaic_to_xheep_kwargs(
     system.add_extension("spi_mode", cfg.spi_mode)
     system.add_extension("ao_rv_timer", cfg.ao_rv_timer)
     system.add_extension("ao_fast_intr", cfg.ao_fast_intr)
-    # mcu_gen adds the geometry of the generated fabric before rendering.
-    system.add_extension(
-        "efpga",
-        cfg.efpga
-        and {**cfg.efpga, "window_base": EFPGA_WINDOW_BASE, "window_size": EFPGA_WINDOW_SIZE},
-    )
     system.add_extension("sched_mode", cfg.scheduler.mode)
     system.add_extension("sched_mode_value", cfg.scheduler.mode_value)
     system.add_extension("resolved_harts", tuple(cfg.harts))

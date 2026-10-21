@@ -25,8 +25,7 @@ firmware loads it, unloads it and loads it again. The configuration key
 | The firmware and the runner of the SoC test | `tb/mosaic_soc/prog_efpga/`, `tb/mosaic_soc/run_efpga.sh` |
 | The regression steps | `efpga_fabric`, `efpga_wrapper`, `efpga_soc`, `efpga_design`, `efpga_log`, `efpga_floonoc`, `efpga_serv` in `scripts/run_sweep.sh` |
 
-What does not exist: pads of the fabric outside the SoC, a second preset, and
-a layout. The wake demonstration with the
+What does not exist: a second preset and a layout. The wake demonstration with the
 fabric has been simulated on each of the three buses, and the wrapper was
 never synthesised. A design is replaced through its unload stream; `clear` does not
 remove a design that has run safely, and a reset keeps it ([Limits](#limits)).
@@ -106,12 +105,16 @@ With this key the generator puts the wrapper and the fabric of the preset in
 | The registers (`BITSTREAM`, `STATUS`, `CONTROL`, `TAG`) | `0x200C_0000`: the always-on peripheral `efpga` of `configs/general.hjson` |
 | The user window | `0x5000_0000`, 4 KB: a slave of the system crossbar |
 | The fabric | `<bundle>/generated/efpga/`: `efpga_gen.py` without designs |
-| The addresses, for firmware | `MOSAIC_EFPGA_BASE`, `MOSAIC_EFPGA_WINDOW_BASE` and `MOSAIC_EFPGA_WINDOW_SIZE` in `mosaic_memory_map.h`; `MOSAIC_ASM_EFPGA_BASE` and `MOSAIC_ASM_EFPGA_WINDOW_BASE` in `mosaic_memory_map.inc` |
+| The pads | pad `k` of the fabric is the last option of the pad of `gpio_k`, for `k` 0 to 7 (`configs/pad_cfg.py`); `pad_control` gives it to the fabric only on request |
+| The addresses, for firmware | `MOSAIC_EFPGA_BASE`, `MOSAIC_EFPGA_WINDOW_BASE` and `MOSAIC_EFPGA_WINDOW_SIZE` in `mosaic_memory_map.h`, with `MOSAIC_EFPGA_PADS` and the `pad_control` register and value of each pad; `MOSAIC_ASM_EFPGA_BASE` and `MOSAIC_ASM_EFPGA_WINDOW_BASE` in `mosaic_memory_map.inc` |
 
 The always-on domain is neither clock-gated nor power-gated. The wrapper takes
 the reset of the bus (`rst_n_sync && debug_reset_n`), out of which it keeps a
-tagged design. Its pads stay inside the SoC: `pad_in_i` is 0 and the outputs
-go nowhere.
+tagged design. Its pads are the mask: out of reset `pad_control` selects each
+pad's GPIO, so the fabric drives no pad and reads 0 from each, and a pad a
+design does not bind stays released. `mosaic_efpga_pads(mask)` of the driver
+gives the pads of `mask` to the fabric and the others back to their GPIO.
+While the fabric is cut off the wrapper drives no pad either.
 
 `mcu_gen.py` calls `efpga_gen.soc_fabric` before it renders the templates,
 which need the fabric's geometry. That function enters `nix develop .#efpga`
@@ -178,7 +181,7 @@ named after its file, with any of these ports and no other.
 | `rst_n` | input | the user reset, low while `CONTROL` holds it and while the fabric is cut off |
 | `valid`, `we`, `be[3:0]`, `addr[7:0]`, `wdata[31:0]` | input | a request of the user window: `addr` is the word address, byte address `[9:2]` |
 | `ack`, `rdata[31:0]` | output | its answer, in the handshake [the wrapper](#the-wrapper) describes |
-| `io_in[7:0]` | input | the pads, 0 while they stay inside the SoC |
+| `io_in[7:0]` | input | the pads, 0 from each pad firmware has not given to the fabric |
 | `io_out[7:0]`, `io_oeb[7:0]` | output | the pads, `io_oeb` low driving one; the two go together |
 
 `efpga_gen.py --shell <design>.v` reads the ports with Yosys and writes the
@@ -211,9 +214,12 @@ when the design passed; any other value ends the run with `0x4000_0000` and
 that value. Through the flow runner the same is `EFPGA_DESIGN=my_design.v
 EFPGA_TEST=my_test.c ./mosaic flow-runner run tb-soc-fw --config
 configs/mosaic_efpga_demo.yaml`. The example is `tb/efpga/shell_regs.v`, one
-register written byte by byte, on the bus and on the pads, and its check
-`tb/efpga/shell_regs_test.c`: the register's reset value, a word, a byte,
-every data line each way, and no request left unanswered.
+register written byte by byte, on the bus and on the pads, which it reads
+back on word 1, and its check `tb/efpga/shell_regs_test.c`: the register's
+reset value, a word, a byte, every data line each way; the pads read 0 before
+firmware gives them to the fabric, carry the register's low byte once given,
+and read 0 again once given back, four of them first; and no request left
+unanswered.
 
 ## How the fabric is configured
 
@@ -655,10 +661,10 @@ Measured on 2026-10-19: the `regs` run ends at 214 µs of simulated time
 (`silent` at 78 µs), a boot from flash at about 27 ms, which takes 300 to
 384 s; `boot_test`, which stops after the cold boot, ends at 24.8 ms (311 s):
 reading code, worker images and the stream from the SPI flash model takes most
-of a boot. The `efpga_soc` step took 881 s with its seven runs, and
-`efpga_design` 877 s with its two boots (warm reboot at 28.7 ms),
-`efpga_log` 629 s and `efpga_floonoc` 569 s, each alone on the machine, and
-`efpga_serv` 642 s, its boot ending at 41 ms; the Verilator build of the SoC with the fabric took 138 s and
+of a boot. Measured on 2026-10-21, each step alone on the machine: `efpga_soc`
+took 894 s with its seven runs, `efpga_design` 1,012 s with its two boots (warm
+reboot at 29.0 ms), `efpga_log` 705 s, `efpga_floonoc` 662 s and `efpga_serv`
+684 s; the Verilator build of the SoC with the fabric took 138 s and
 1.1 GB on 2026-10-17. The wrapper step took 1,009 s with its 50 runs, and the
 fabric step 91 s.
 
@@ -747,9 +753,11 @@ without generating one.
   follows whatever the fabric's default route carries. Measured on
   2026-10-13 with `bus_regs`, which binds no pad: once connected, between
   four and seven of the eight output enables were high, and they changed with
-  the value written to a register. The wrapper has no mask for the pads. A
-  design must bind every pad and hold the enable of those it does not use, as
-  `counter8_en` does, and the SoC test leaves the pads unconnected.
+  the value written to a register. In a SoC a pad reaches its package pin
+  only once firmware gives it to the fabric (`mosaic_efpga_pads`), and the
+  shell holds every pad of a design without `io_oeb` released. A design with
+  its own top_wrapper must still bind every pad it may be given and hold the
+  enable of those it does not use, as `counter8_en` does.
 - **What the wrapper is not.** It has one OBI slave port, a slave of the
   system crossbar like the SoC's other slaves. It cannot master the bus and
   raises no interrupt. It was never synthesised: there is no

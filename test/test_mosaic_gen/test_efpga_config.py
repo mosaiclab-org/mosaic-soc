@@ -315,3 +315,33 @@ def test_the_table_holds_no_more_entries_than_cold_boot_takes(tmp_path, monkeypa
     monkeypatch.setattr(pack_flash, "MAX_ENTRIES", 1)  # two workers, then the eFPGA
     with pytest.raises(pack_flash.PackError, match="the cold-boot loader takes 1"):
         _packed(tmp_path, DEMO)
+
+
+# ── the pads ─────────────────────────────────────────────────────────
+
+
+def test_the_fabric_pads_are_the_last_option_of_gpio_0_to_7_only_with_the_key():
+    def options(path):
+        ring = _kwargs(path)["xheep"].get_padring()
+        return {pad.name: [pin.name for pin in pad.pins] for pad in ring.pad_list}
+
+    with_fabric, without = options(DEMO), options(PLAIN)
+    for k in range(8):
+        assert with_fabric[f"gpio_{k}"][0] == f"gpio_{k}"  # what pad_control selects out of reset
+        assert with_fabric[f"gpio_{k}"][-1] == f"efpga_pad_{k}"
+        assert with_fabric[f"gpio_{k}"][:-1] == without[f"gpio_{k}"]
+    assert not any(n.startswith("efpga") for pins in without.values() for n in pins)
+    assert {p: v for p, v in with_fabric.items() if not p.startswith("gpio_")} == {
+        p: v for p, v in without.items() if not p.startswith("gpio_")}
+
+
+def test_the_software_names_each_pad_mux_and_the_wrapper_reaches_the_pads():
+    kwargs = _kwargs(DEMO)
+    table = software_gen.efpga_pad_mux(kwargs["xheep"])
+    assert table == [(0x2008_0000 + 4 * k, v) for k, v in enumerate([1, 2, 2, 2, 1, 1, 2, 2])]
+    header = software_gen._memory_map_header(load_mosaic_yaml(DEMO), 0x3000, 0x200, table)
+    assert "#define MOSAIC_EFPGA_PADS 8u" in header
+    assert "#define MOSAIC_EFPGA_PAD_MUX_FABRIC {1u, 2u, 2u, 2u, 1u, 1u, 2u, 2u}" in header
+    top = _render("hw/mosaic_soc/mosaic_soc.sv.tpl", kwargs)
+    assert ".pad_in_i({efpga_pad_7_i, " in top and "efpga_pad_0_oe_o})" in top
+    assert "output logic efpga_pad_0_oe_o," in top

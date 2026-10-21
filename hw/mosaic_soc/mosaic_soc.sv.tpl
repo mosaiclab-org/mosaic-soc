@@ -714,10 +714,11 @@ module mosaic_soc
       .reg_rsp_o(efpga_reg_rsp),
       .obi_req_i(efpga_win_req),
       .obi_resp_o(efpga_win_resp),
-      // No pad of the SoC reaches the fabric yet.
-      .pad_in_i('0),
-      .pad_out_o(),
-      .pad_oe_o()
+      // Pad k of the fabric is an option of the pad of gpio_k (configs/pad_cfg.py),
+      // which pad_control gives to the fabric only on request.
+      .pad_in_i({${", ".join(f"efpga_pad_{k}_i" for k in reversed(range(8)))}}),
+      .pad_out_o({${", ".join(f"efpga_pad_{k}_o" for k in reversed(range(8)))}}),
+      .pad_oe_o({${", ".join(f"efpga_pad_{k}_oe_o" for k in reversed(range(8)))}})
   );
 
 % endif

@@ -599,7 +599,35 @@ def _topology_header(cfg: "MosaicConfig") -> str:
     return "\n".join(lines)
 
 
-def _memory_map_header(cfg: "MosaicConfig", shared_base: int, shared_size: int) -> str:
+def efpga_pad_mux(xheep: Any) -> list[tuple[int, int]]:
+    """For each pad k of the eFPGA, in order: the address of the pad_control
+    register that muxes its pad (configs/pad_cfg.py) and the value that gives
+    it to the fabric; 0 gives it back to the GPIO. pad_control has one register
+    per muxed pad, in the pad ring's order."""
+    domain = xheep.get_base_peripheral_domain()
+    pad_control = next(
+        (p for p in domain.get_peripherals() if p.get_name() == "pad_control"), None
+    )
+    if pad_control is None:
+        raise SoftwareGenerationError("soc.efpga needs pad_control for its pads")
+    base = domain.get_start_address() + pad_control.get_address()
+    muxed = [pad for pad in xheep.get_padring().pad_list if len(pad.pins) > 1]
+    table = {}
+    for index, pad in enumerate(muxed):
+        for value, pin in enumerate(pad.pins):
+            if pin.name.startswith("efpga_pad_"):
+                table[int(pin.name[len("efpga_pad_"):])] = (base + 4 * index, value)
+    if sorted(table) != list(range(len(table))) or not table:
+        raise SoftwareGenerationError(f"the eFPGA's pads are not muxed in order: {sorted(table)}")
+    return [table[k] for k in range(len(table))]
+
+
+def _memory_map_header(
+    cfg: "MosaicConfig",
+    shared_base: int,
+    shared_size: int,
+    efpga_pad_mux: Sequence[tuple[int, int]] = (),
+) -> str:
     sram_size = _writable_bytes(cfg)
     selected = expanded_user_peripherals(
         cfg.peripherals,
@@ -706,6 +734,18 @@ def _memory_map_header(cfg: "MosaicConfig", shared_base: int, shared_size: int) 
                 f"#define MOSAIC_EFPGA_BASE {_hex32(AO_PERIPHERAL_BASE + EFPGA_OFFSET)}u",
                 f"#define MOSAIC_EFPGA_WINDOW_BASE {_hex32(EFPGA_WINDOW_BASE)}u",
                 f"#define MOSAIC_EFPGA_WINDOW_SIZE {_hex32(EFPGA_WINDOW_SIZE)}u",
+            ]
+        )
+    if efpga_pad_mux:
+        # efpga_pad_mux(): pad_control's register of each of the fabric's pads,
+        # and the value that gives the pad to the fabric (0: to the GPIO).
+        lines.extend(
+            [
+                f"#define MOSAIC_EFPGA_PADS {len(efpga_pad_mux)}u",
+                "#define MOSAIC_EFPGA_PAD_MUX_ADDRS {"
+                + ", ".join(f"{_hex32(address)}u" for address, _ in efpga_pad_mux) + "}",
+                "#define MOSAIC_EFPGA_PAD_MUX_FABRIC {"
+                + ", ".join(f"{value}u" for _, value in efpga_pad_mux) + "}",
             ]
         )
     lines.extend(["", "#endif  // MOSAIC_GENERATED_MEMORY_MAP_H_", ""])
@@ -1562,7 +1602,9 @@ def _deployment_header(manifest: Mapping[str, Any]) -> str:
 
 
 def generate_software_artifacts(
-    cfg: "MosaicConfig", output_dir: str | Path
+    cfg: "MosaicConfig",
+    output_dir: str | Path,
+    efpga_pad_mux: Sequence[tuple[int, int]] = (),
 ) -> SoftwareArtifacts:
     """Generate a complete software contract below ``output_dir``.
 
@@ -1570,6 +1612,7 @@ def generate_software_artifacts(
         cfg: Fully parsed/resolved MOSAIC configuration. ``cfg.harts`` must be
             populated by ``mosaic_config.parse_yaml``.
         output_dir: Root of the generated software tree.
+        efpga_pad_mux: efpga_pad_mux() of the design's XHeep, with soc.efpga.
 
     Returns:
         A :class:`SoftwareArtifacts` path bundle.
@@ -1607,7 +1650,7 @@ def generate_software_artifacts(
     _write_if_changed(topology_header, _topology_header(cfg))
     _write_if_changed(runtime_header, _runtime_header(images))
     _write_if_changed(
-        memory_map_header, _memory_map_header(cfg, shared_base, shared_size)
+        memory_map_header, _memory_map_header(cfg, shared_base, shared_size, efpga_pad_mux)
     )
     _write_if_changed(
         assembler_memory_map, _assembler_memory_map(cfg, shared_base, shared_size)

@@ -61,6 +61,19 @@ static inline uint32_t mosaic_efpga_load(const volatile uint32_t *words, uint32_
     return status;
 }
 
+#ifdef MOSAIC_EFPGA_PADS
+// Gives the pads of `mask` (bit k: pad k of the fabric, an option of the pad
+// of gpio_k) to the fabric, and every other one back to its GPIO. Out of reset
+// each is the GPIO's (configs/pad_cfg.py, pad_control).
+static inline void mosaic_efpga_pads(uint32_t mask) {
+    static const uint32_t addresses[] = MOSAIC_EFPGA_PAD_MUX_ADDRS;
+    static const uint32_t fabric[] = MOSAIC_EFPGA_PAD_MUX_FABRIC;
+    for (uint32_t pad = 0; pad < MOSAIC_EFPGA_PADS; ++pad) {
+        *(volatile uint32_t *)(uintptr_t)addresses[pad] = ((mask >> pad) & 1u) ? fabric[pad] : 0u;
+    }
+}
+#endif
+
 // Connects a configured fabric to the bus and its edges, with the user reset
 // held for one write and then released.
 static inline void mosaic_efpga_connect(void) {

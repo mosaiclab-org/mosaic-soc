@@ -167,7 +167,7 @@ The suite covers configuration validation, template rendering, the software
 layout, the harness gates, the physical models, the evidence parsers, and the
 eFPGA generator's tool pins, PDK isolation and frame order (with fake tools:
 no test runs FABulous). The
-measured result on this tree is **1822 passed and 102 skipped**. Most skipped
+measured result on this tree is **1825 passed and 102 skipped**. Most skipped
 tests need hardening run trees or a PDK clone that are not in version control.
 One is skipped when no `riscv64-unknown-elf-gcc` is on the host, and
 `test_socview.py` adds one test per bundle under `build/mosaic/` whose

@@ -93,6 +93,14 @@ def config(xheep: XHeep) -> PadRing:
     for i in range(32):
         digital_pins.append(Inout(f"gpio_{i}", attributes={"priority": 0}))
 
+    # The pads of the eFPGA (soc.efpga, docs/efpga.md), the 8 of the preset
+    # `small`: pad k of the fabric is the last option of the pad of gpio_k, and
+    # pad_control gives it to the fabric only on request. Out of reset each of
+    # those pads is the GPIO's, so a pad no design binds stays released.
+    efpga_pads = 8 if xheep.get_extension("efpga") else 0
+    for k in range(efpga_pads):
+        digital_pins.append(Inout(f"efpga_pad_{k}"))
+
     # Generate a pin dict with all these pins
     pin_dict = {}
     for pin in digital_pins:
@@ -168,6 +176,10 @@ def config(xheep: XHeep) -> PadRing:
             ["i2c_sda", "gpio_30"],
         ],
     }
+
+    for item in mapping[Side.TOP]:
+        if item[0].startswith("gpio_") and int(item[0][len("gpio_"):]) < efpga_pads:
+            item.append(f"efpga_pad_{item[0][len('gpio_'):]}")
 
     # Replace the strings for their correspinding Pin element from the pins list
     mapping = {

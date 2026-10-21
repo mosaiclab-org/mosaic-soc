@@ -80,7 +80,7 @@ For sky130, none of the eight is satisfied.
 | Physical flow | No step is skipped and a missing metric is not read as clean. | `flow/librelane/experimental/run_signoff.sh`; `harness/evidence/` and its tests |
 | Reproducibility | The simulation and physical toolchains are pinned to the same nix-eda and nixpkgs revisions. | `flake.nix`; `test_toolchain_pin.py`; `./mosaic doctor` |
 | Agent tooling | Tools reach the flows only through typed, gated calls. | `harness/gates.py`; `test_mcp_plugin_mode.py`, `test_agent_runtime.py` |
-| Python suite | 1822 passed, 102 skipped. | `make test` |
+| Python suite | 1825 passed, 102 skipped. | `make test` |
 
 The sweep steps are defined in the repository; their results depend on running
 them with the pinned toolchain ([verification.md](verification.md)).
@@ -163,7 +163,8 @@ eFPGA ([efpga.md](efpga.md)):
 
 - **The fabric is in one simulated SoC design, on three buses.** Only the
   wake demonstration with the key has been simulated, on `obi`, `log` and
-  `floonoc`. The fabric's pads stay inside the SoC, and there is no layout;
+  `floonoc`. The fabric's pads reach their package pins only through
+  `pad_control`, on request, and there is no layout;
   the wrapper was never synthesised. The command from a user's Verilog to a
   simulation shows that the design works only as far as the user's own
   check (`EFPGA_TEST`) tests it.
@@ -179,9 +180,10 @@ eFPGA ([efpga.md](efpga.md)):
   and the loader does not check it. A frame goes into the latches only after
   its check word: of 70 single-bit flips tried once, none stopped the
   simulator, where one of 70 did before the check words.
-- **A pad the user design does not bind is driven**, with an output enable
-  that follows the design's internal signals. The wrapper has no mask for the
-  pads, and the SoC test leaves them unconnected.
+- **A pad the user design does not bind is driven** inside the fabric, with
+  an output enable that follows the design's internal signals. It reaches its
+  package pin only when firmware gives the pad to the fabric, and the shell
+  holds the pads of a design that binds none released.
 - **One preset, three user designs and two loading cores are tested**:
   `small`, an 8-bit counter on the pads, two registers on the east edge, and
   the shell example, one register; a cv32e20 loads them, from SRAM and from

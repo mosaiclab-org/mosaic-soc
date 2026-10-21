@@ -520,7 +520,11 @@ def main():
 
             software_out = generated_root / "sw"
             software_gen.generate_software_artifacts(
-                kwargs["mosaic_cfg"], software_out
+                kwargs["mosaic_cfg"],
+                software_out,
+                software_gen.efpga_pad_mux(kwargs["xheep"])
+                if kwargs["mosaic_cfg"].efpga
+                else (),
             )
             for output in sorted(path for path in software_out.rglob("*") if path.is_file()):
                 relative = output.relative_to(software_out)

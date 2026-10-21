@@ -5,7 +5,9 @@
 // shell of the preset alone, with no top_wrapper of its own. One register
 // behind the user window of hw/efpga/mosaic_efpga.sv, which describes the
 // handshake, and its low byte on the pads:
-//   every word  R, 32 bits, written byte by byte (be), 0 after the user reset
+//   word 0      R, 32 bits, written byte by byte (be), 0 after the user reset
+//   word 1      read: R with its low byte replaced by the pads' inputs
+//   any word    write: R
 //   pads 7:0    R[7:0], driven
 `default_nettype none
 module shell_regs (
@@ -14,9 +16,11 @@ module shell_regs (
     input  wire        valid,
     input  wire        we,
     input  wire [ 3:0] be,
+    input  wire [ 7:0] addr,  // the word address: only bit 0 is decoded
     input  wire [31:0] wdata,
     output wire        ack,
     output wire [31:0] rdata,
+    input  wire [ 7:0] io_in,
     output wire [ 7:0] io_out,
     output wire [ 7:0] io_oeb
 );
@@ -37,7 +41,7 @@ module shell_regs (
     end
 
     assign ack    = ack_q;
-    assign rdata  = r;
+    assign rdata  = {r[31:8], addr[0] ? io_in : r[7:0]};
     assign io_out = r[7:0];
     assign io_oeb = 8'h00;
 endmodule
