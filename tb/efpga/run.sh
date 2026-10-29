@@ -14,8 +14,14 @@
 #      Three of them show their fault only in the cycle where the bench holds,
 #      resets or mask-resets the counter, so a bench that stops earlier fails.
 #
-# Pass criterion: "TB PASS" on stdout, printed once, after all sixteen runs gave
-# the expected result. Usage: tb/efpga/run.sh   (inside `nix develop .#sim`)
+# With EFPGA_NETLIST=<the --out of efpga_gen.py --stitch>, the same bench runs
+# on the hardened fabric instead of the RTL: the stitched macro's netlist, the
+# tiles' netlists and GF180MCU's cell models (-DFUNCTIONAL), in Verilator only,
+# eight runs, with every flip-flop at 1 and every latch at 0 at power-up.
+#
+# Pass criterion: "TB PASS" on stdout, printed once, after all sixteen (eight)
+# runs gave the expected result. Usage: tb/efpga/run.sh   (inside `nix develop
+# .#sim`)
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -58,19 +64,23 @@ flipped(24, 0x80, True, "pad_oe_fault")          # a select bit of a pad's outpu
 frame = 4 * (1 + geometry["rows"])       # a header word and one data word per row
 open(f"{obj}/last_frame_missing.bin", "wb").write(bits[:-frame - 4] + bits[-4:])
 EOF
-SRC="-f $OUT/fabric.f tb/efpga/counter8_en.v tb/efpga/tb_efpga_fabric.sv"
+efpga_fabric
+SRC="$FABRIC tb/efpga/counter8_en.v tb/efpga/tb_efpga_fabric.sv"
 
 echo "### [2/3] building the bench ($DEFS) ..."
-iverilog -V | sed -n 1p
-iverilog -g2012 -s tb_efpga_fabric $DEFS -I "$OUT" -o "$OBJ/tb.vvp" $SRC
+if [ "$SIMS" != verilator ]; then
+  iverilog -V | sed -n 1p
+  iverilog -g2012 -s tb_efpga_fabric $DEFS -I "$OUT" -o "$OBJ/tb.vvp" $SRC
+fi
 # -O0 for the model's C++: each run lasts under a second, -O1 triples the build.
 # -Wno-cpp: glibc's "_FORTIFY_SOURCE requires compiling with optimization".
-verilator --binary -j 0 --timing --timescale 1ns/1ps --top-module tb_efpga_fabric \
-  --Mdir "$OBJ/verilator" -o Vtb_efpga_fabric $DEFS -I"$OUT" \
+verilator --binary -j "${VJOBS:-0}" --timing --timescale 1ns/1ps \
+  --top-module tb_efpga_fabric --Mdir "$OBJ/verilator" -o Vtb_efpga_fabric $DEFS -I"$OUT" \
   -Wno-fatal -Wno-UNOPTFLAT -Wno-TIMESCALEMOD -MAKEFLAGS OPT_FAST=-O0 -CFLAGS -Wno-cpp $SRC
 
 echo "### [3/3] running ..."
-for sim in icarus verilator; do
+RUNS=0
+for sim in $SIMS; do
   case $sim in
     icarus) RUN=(vvp -n "$OBJ/tb.vvp") ;;
     verilator) RUN=("$OBJ/verilator/Vtb_efpga_fabric") ;;
@@ -83,6 +93,7 @@ for sim in icarus verilator; do
   done
   run_case $sim pad_oe_fault output_enable_mismatch "${RUN[@]}" "+bitstream=$OBJ/pad_oe_fault.bin"
   run_case $sim last_frame_missing strobe_lines_not_all_pulsed "${RUN[@]}" "+bitstream=$OBJ/last_frame_missing.bin"
+  RUNS=$((RUNS + 8))
 done
 [ $FAILED -eq 0 ] || { echo "TB FAIL reason=a_run_did_not_give_the_expected_result"; exit 1; }
-echo "TB PASS fabric=small simulators=icarus,verilator runs=16"
+echo "TB PASS fabric=small ${EFPGA_NETLIST:+netlist=$(basename "$EFPGA_NETLIST") }simulators=${SIMS// /,} runs=$RUNS"

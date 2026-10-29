@@ -164,9 +164,12 @@ eFPGA ([efpga.md](efpga.md)):
 - **The fabric is in one simulated SoC design, on three buses.** Only the
   wake demonstration with the key has been simulated, on `obi`, `log` and
   `floonoc`. The fabric's pads reach their package pins only through
-  `pad_control`, on request, and there is no layout: the wrapper and the
-  fabric of `small` are synthesised for GF180MCU, with no negative slack at
-  20 MHz before layout, but not placed. The command from a user's Verilog to a
+  `pad_control`, on request, and there is no layout of a SoC with it: the
+  wrapper and the fabric of `small` are synthesised for GF180MCU, with no
+  negative slack at 20 MHz before layout, and the fabric alone is hardened as
+  a macro clean in DRC, LVS and antenna, whose netlist passes the benches of
+  the fabric and of the wrapper in Verilator (not in the sweep). Its timing is
+  not analysed: FABulous's flows have no timing step. The command from a user's Verilog to a
   simulation shows that the design works only as far as the user's own
   check (`EFPGA_TEST`) tests it.
 - **`clear` is unsafe on a design that has run.** It zeroes every latch at

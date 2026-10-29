@@ -24,13 +24,16 @@ tasks through the TDU. The configuration key `soc.efpga` puts it in the SoC:
 | The shell, and the command from a user's Verilog to a simulation | `efpga_gen.py --shell`; `EFPGA_DESIGN=<design>.v tb/mosaic_soc/run_fw.sh` |
 | The firmware and the runner of the SoC test | `tb/mosaic_soc/prog_efpga/`, `tb/mosaic_soc/run_efpga.sh` |
 | The synthesis for GF180MCU | `flow/librelane/scripts/efpga_synth.sh`, `gf180_latch_map.v` |
-| The hardening of tiles for GF180MCU, every tile type of `small` | `efpga_gen.py --harden`, `nix develop .#fabric` |
+| The hardening for GF180MCU: every tile type of `small` and the stitched fabric macro, whose netlist the two benches simulate | `efpga_gen.py --harden` and `--stitch`, `nix develop .#fabric`; `EFPGA_NETLIST` of `tb/efpga/run.sh` and `run_wrapper.sh` |
 | The regression steps | `efpga_fabric`, `efpga_wrapper`, `efpga_soc`, `efpga_design`, `efpga_log`, `efpga_floonoc`, `efpga_serv`, `efpga_medium`, `efpga_task`, `efpga_synth` in `scripts/run_sweep.sh` |
 
-What does not exist: a layout. The wake demonstration with the
-fabric has been simulated on each of the three buses, and the wrapper and the
-fabric of `small` have been synthesised for GF180MCU, not placed
-([Synthesis](#synthesis)). A design is replaced through its unload stream; `clear` does not
+What does not exist: a layout of a SoC with the fabric. The wake
+demonstration with the fabric has been simulated on each of the three buses,
+the wrapper and the fabric of `small` have been synthesised for GF180MCU
+([Synthesis](#synthesis)), and the fabric of `small` has been hardened alone,
+as a macro clean in DRC, LVS and antenna whose netlist passes the benches of
+the fabric and of the wrapper; its timing has not been analysed
+([Hardening](#hardening-for-gf180mcu)). A design is replaced through its unload stream; `clear` does not
 remove a design that has run safely, and a reset keeps it ([Limits](#limits)).
 
 ## The preset `small`
@@ -896,9 +899,74 @@ antenna 0, routing DRC 0 and no problem in Yosys's check.
 | `N_term_single`, `S_term_single` | 2,498, 2,450 | 72,613 each |
 | `N_term_RAM_IO`, `S_term_RAM_IO` | 2,576, 2,591 | 80,183 each |
 
-The stitched fabric macro (`FABulousFabricMacroFlow`), its netlist simulation
-with the fabric and wrapper benches, and the SoC with the macro each need the
-user's approval.
+```bash
+nix develop .#fabric --command python3 util/mosaic_gen/efpga_gen.py --fabric build/efpga/small \
+    --stitch build/efpga_harden/small --stitch build/efpga_harden/small_tiles \
+    --out build/efpga_harden/small_fabric
+```
+
+`--stitch` takes the runs of `--harden` that hold the tile macros, refuses one
+hardened from another fabric (its manifest's hash), a tile that is not clean,
+a tile in two runs and a fabric tile with no macro, and runs FABulous's
+fabric macro flow (`FABulousFabricMacroFlow`) with the project's
+`Fabric/gds_config.yaml`, under the same gate and the same check of the PDK
+clone. It writes `macro/fabric/` and a `manifest.json` with `fabric_macro` and
+the `tile_macros` it used.
+
+Measured on 2026-10-29, the stitched fabric of `small` in 12.4 minutes: clean.
+Magic and KLayout DRC 0, LVS 0, antenna 0, routing DRC 0, XOR 0, no
+disconnected pin; 22 tile instances on a die of 1,223 x 1,784 µm (2.18 mm²);
+the PDK clone unchanged. FABulous's project template sets
+`ERROR_ON_SYNTH_CHECKS: False` in `Fabric/gds_config.yaml`, which the decision
+above allows, and Yosys's check reported nothing there anyway: to it the tiles are macros, so the loops
+that close through them are out of its sight. The netlist benches below are
+the evidence for them.
+
+The benches of the fabric and of the wrapper run on the macro in place of the
+RTL:
+
+```bash
+EFPGA_NETLIST=build/efpga_harden/small_fabric nix develop .#sim --command tb/efpga/run.sh
+EFPGA_NETLIST=build/efpga_harden/small_fabric nix develop .#sim --command tb/efpga/run_wrapper.sh
+```
+
+With `EFPGA_NETLIST`, `efpga_fabric` in `tb/efpga/common.sh` compiles the
+stitched macro's netlist, the netlists of its tiles and GF180MCU's cell models
+in their functional form (`-DFUNCTIONAL`, no delays) instead of the fabric's
+RTL. It refuses a run stitched from another fabric than the one the streams
+were just generated for (the manifest's hash), a macro that is not clean, and
+a netlist with a sequential cell other than `dffq_1` and `latq_1`, the two
+whose power-up it sets. The runs and their expected results are those on the
+RTL; a run may last 1,800 s instead of 120 s.
+
+- **Verilator only.** In Icarus the netlist never leaves `x`. The cleared
+  configuration closes loops in the routing, which hold the `x` they start
+  with, and the gates of a LUT pass on an `x` input that its RTL masks: at the
+  clear, 9,700 of the 23,806 nets of `small` were `x`, each held by a loop,
+  none made `x` by a cell from defined inputs. Verilator has two values.
+- **Every latch at 0 and every flip-flop at 1 at power-up.** With Verilator's
+  random start (`+verilator+rand+reset+2`) the latches hold random
+  configurations whose loops oscillate, and the model stops at time 0 with
+  `DIDNOTCONVERGE`. The bench gives the cell models' UDPs an initial value
+  instead (`dffq_1` and `latq_1` hold D inverted, so the UDP values are the
+  opposite): the latches start as the loader's clear leaves them, the
+  flip-flops at a value a design's reset or the clear must undo. What latches
+  that start at random do on silicon is not measured ([Limits](#limits)).
+
+Measured on 2026-10-29, both pass, each run with the result it has on the
+RTL. The fabric bench: 8 runs in 7.6 minutes, of which about 5 build the model
+(1.5 GB with two jobs) and each run takes about 14 s. The wrapper bench: 30
+runs in 2.5 hours, from seconds to 16 minutes a run (`regs`), 1.6 GB at most.
+Neither is part of the sweep: they need the hardened tiles and the stitched
+macro, about 50 minutes of the physical flow.
+
+Timing is not checked, here or in the flow. FABulous's tile and fabric macro
+flows have no static timing step: LibreLane's setup, hold, slew and
+capacitance checkers run in both, find no metric (`No metrics found`) and
+pass. The gate of `--harden` and `--stitch` is the four physical metrics
+alone, and the macro is clean in them, not in timing ([Limits](#limits)).
+
+The SoC with the macro needs the user's approval.
 
 Getting the flow to run took six things the shell and the script now do:
 LibreLane's tools first on `PATH` (its Yosys has the Python packages its
@@ -1052,7 +1120,9 @@ which would enable a PDK through ciel; and Magic DRC unconditional.
   time. The wrapper writes 0 to every latch as it leaves reset unless the
   latches hold a design, but until then the SoC test depends on the start at
   0, so the Verilator pin matters there too. The wrapper bench passes in Icarus, where every latch starts
-  at `x`.
+  at `x`. On the hardened netlist, which Icarus cannot simulate, the benches
+  set the same start at 0 in the cell models
+  ([Hardening](#hardening-for-gf180mcu)).
 - **No timing.** nextpnr 0.9 reads `bel.v2.txt`, which has no delay lines, and
   does not read `bel.v3.txt`, where FABulous writes cell delays. The cell
   delays in `nextpnr.log` (3.0 ns through a LUT, 2.5 ns setup, 1.0 ns clock to
@@ -1060,7 +1130,10 @@ which would enable a PDK through ciel; and Magic DRC unconditional.
   routing switch the same delay. None of them comes from a cell library or a
   layout, so the delays and the maximum frequency in `nextpnr.log` are not a
   timing result. `sdf-timing` is the PyPI release, not the commit FABulous
-  pins; only FABulous's timing-model flow parses SDF with it.
+  pins; only FABulous's timing-model flow parses SDF with it. The hardened
+  tiles and fabric macro have no timing analysis either: FABulous's flows
+  run no static timing step, and their timing checkers pass on no metric
+  ([Hardening](#hardening-for-gf180mcu)).
 - **A tool combination FABulous does not test.** FABulous 2.2.0's own
   environment pins other Yosys and nextpnr revisions. The evidence that 2.2.0
   works with Yosys 0.62 and nextpnr 0.9 is the sweep steps that run them.

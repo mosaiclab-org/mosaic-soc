@@ -17,6 +17,10 @@
 #      control is a stream in the wrong role, or a fault forced into the
 #      design under test.
 #
+# With EFPGA_NETLIST=<the --out of efpga_gen.py --stitch>, the same runs on
+# the hardened fabric instead of the RTL, in Verilator only (efpga_fabric in
+# tb/efpga/common.sh).
+#
 # Pass criterion: "TB PASS" on stdout, printed once, after every run gave the
 # expected result. Usage: tb/efpga/run_wrapper.sh   (inside `nix develop .#sim`)
 set -euo pipefail
@@ -101,16 +105,19 @@ for name in ("no_tag", "bad_check"):
     write(name, seal([SYNC], cut, end))
 write("stray", [0])
 EOF
-SRC="-f $OUT/fabric.f hw/mosaic_soc/include/obi_pkg.sv hw/mosaic_soc/include/reg_pkg.sv
+efpga_fabric
+SRC="$FABRIC hw/mosaic_soc/include/obi_pkg.sv hw/mosaic_soc/include/reg_pkg.sv
   hw/vendor/pulp_platform/tech_cells_generic/src/rtl/tc_clk.sv hw/efpga/mosaic_efpga.sv
   tb/efpga/counter8_en.v tb/efpga/tb_mosaic_efpga.sv"
 
 echo "### [2/3] building the bench ($DEFS) ..."
-iverilog -V | sed -n 1p
-iverilog -g2012 -s tb_mosaic_efpga $DEFS -I "$OUT" -o "$OBJ/tb.vvp" $SRC
+if [ "$SIMS" != verilator ]; then
+  iverilog -V | sed -n 1p
+  iverilog -g2012 -s tb_mosaic_efpga $DEFS -I "$OUT" -o "$OBJ/tb.vvp" $SRC
+fi
 # -O0 for the model's C++: each run lasts seconds, -O1 triples the build.
 # -Wno-cpp: glibc's "_FORTIFY_SOURCE requires compiling with optimization".
-verilator --binary -j 0 --timing --timescale 1ns/1ps --top-module tb_mosaic_efpga \
+verilator --binary -j "${VJOBS:-0}" --timing --timescale 1ns/1ps --top-module tb_mosaic_efpga \
   --Mdir "$OBJ/verilator" -o Vtb_mosaic_efpga $DEFS -I"$OUT" \
   -Wno-fatal -Werror-USERFATAL -Wno-UNOPTFLAT -Wno-TIMESCALEMOD \
   -MAKEFLAGS OPT_FAST=-O0 -CFLAGS -Wno-cpp $SRC
@@ -127,7 +134,7 @@ STREAMS=("+silent=$SILENT" "+regs=$REGS" "+silent_unload=$SILENT_UNLOAD"
          "+stray=$OBJ/stray.hex" "+task=$OUT/bitstream/task_count.hex"
          "+task_unload=$OUT/bitstream/task_count.unload.hex")
 RUNS=0
-for sim in icarus verilator; do
+for sim in $SIMS; do
   case $sim in
     icarus) RUN=(vvp -n "$OBJ/tb.vvp") ;;
     verilator) RUN=("$OBJ/verilator/Vtb_mosaic_efpga") ;;
@@ -171,6 +178,6 @@ task_result_pin         task_result              +task_run +fault=task_result_pi
 sleep_stuck             slot_asleep_with_a_task  +task_run +fault=sleep_stuck
 EOF
 done
-[ $FAILED -eq 0 ] && [ $RUNS -eq 60 ] \
+[ $FAILED -eq 0 ] && [ $RUNS -eq $((30 * $(wc -w <<< "$SIMS"))) ] \
   || { echo "TB FAIL reason=a_run_did_not_give_the_expected_result"; exit 1; }
-echo "TB PASS wrapper=mosaic_efpga fabric=small simulators=icarus,verilator runs=$RUNS"
+echo "TB PASS wrapper=mosaic_efpga fabric=small ${EFPGA_NETLIST:+netlist=$(basename "$EFPGA_NETLIST") }simulators=${SIMS// /,} runs=$RUNS"

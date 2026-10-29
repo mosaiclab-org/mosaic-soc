@@ -494,3 +494,39 @@ def test_the_fabric_shell_takes_librelane_3_0_11_on_the_signoff_nix_eda():
     lock = json.loads((REPO_ROOT / "flake.lock").read_text())["nodes"]
     assert lock["librelane-fabric"]["inputs"]["nix-eda"] == ["librelane", "nix-eda"]
     assert lock["librelane-fabric"]["locked"]["rev"].startswith("33ab64861c55")
+
+
+def _tile_run(tmp_path, fabric, name, tiles):
+    run = tmp_path / name
+    run.mkdir()
+    (run / "manifest.json").write_text(json.dumps({
+        "fabric": {"manifest_sha256": efpga_gen._sha256(fabric / "manifest.json")},
+        "tiles": {tile: {"clean": clean} for tile, clean in tiles.items()}}))
+    return run
+
+
+def test_the_fabric_is_stitched_only_from_clean_macros_of_its_own_tiles(tmp_path):
+    fabric = _fabric_dir(tmp_path)
+    (fabric / "proj" / "fabric.csv").write_text(
+        "FabricBegin\nNULL,N_term_single,NULL\nW_IO,LUT4AB,RAM_IO\nFabricEnd\n")
+    good = _tile_run(tmp_path, fabric, "good", {"W_IO": True, "LUT4AB": True, "RAM_IO": True})
+    with pytest.raises(RuntimeError, match="no clean macro of N_term_single"):
+        efpga_gen.stitch(fabric, tmp_path / "out", [good], environ={})
+    dirty = _tile_run(tmp_path, fabric, "dirty", {"N_term_single": False})
+    with pytest.raises(RuntimeError, match="N_term_single is not clean"):
+        efpga_gen.stitch(fabric, tmp_path / "out", [good, dirty], environ={})
+    twice = _tile_run(tmp_path, fabric, "twice", {"LUT4AB": True})
+    with pytest.raises(RuntimeError, match="LUT4AB: a macro in two runs"):
+        efpga_gen.stitch(fabric, tmp_path / "out", [good, twice], environ={})
+    other = tmp_path / "other"
+    (other).mkdir()
+    (other / "manifest.json").write_text(json.dumps({"fabric": {"manifest_sha256": "0"}}))
+    with pytest.raises(RuntimeError, match="its tiles are not of"):
+        efpga_gen.stitch(fabric, tmp_path / "out", [other], environ={})
+    assert not (tmp_path / "out").exists()
+
+
+def test_the_stitching_driver_parses_and_uses_the_projects_fabric_config():
+    compile(efpga_gen.STITCH, "stitch", "exec")
+    assert 'base_config_path=proj / "Fabric" / "gds_config.yaml"' in efpga_gen.STITCH
+    assert "ConditionalMagicDRC.run = DRC.run" in efpga_gen.STITCH  # Magic DRC always runs

@@ -33,7 +33,7 @@ line a runner prints on failure, so there the exit status decides.
 | `tb/floonoc/` | the OBI and AXI bridges, then the generated network on chip | cocotb + Verilator | `tb/floonoc/cocotb/run.sh`, `tb/floonoc/cocotb/run.sh stage2` |
 | `tb/tl_obi/` | the TileLink to OBI bridge used by Rocket and BOOM | Verilator | `tb/tl_obi/run.sh` |
 | `tb/sci/<core>/` | one SCI wrapper with its core: dormancy, wake, execution | Verilator | `tb/sci/<core>/run.sh` (serv, fazyrv, picorv32, hazard3) |
-| `tb/efpga/` | a generated eFPGA fabric alone, configured with a real bitstream; then the wrapper that makes it a bus peripheral and a worker of the TDU, with the bench as bus master and as the TDU ([efpga.md](efpga.md)) | Icarus Verilog and Verilator | `tb/efpga/run.sh`, `tb/efpga/run_wrapper.sh` |
+| `tb/efpga/` | a generated eFPGA fabric alone, configured with a real bitstream; then the wrapper that makes it a bus peripheral and a worker of the TDU, with the bench as bus master and as the TDU ([efpga.md](efpga.md)); with `EFPGA_NETLIST`, both on the hardened fabric macro, in Verilator only and not in the sweep ([efpga.md](efpga.md#hardening-for-gf180mcu)) | Icarus Verilog and Verilator | `tb/efpga/run.sh`, `tb/efpga/run_wrapper.sh` |
 | `tb/mosaic/` | the generated `cpu_subsystem` with three serial cores and per-hart memories | Verilator; cocotb for the wake loop | `tb/mosaic/run.sh`, `tb/mosaic/cocotb/run.sh` |
 | `tb/mosaic_soc/` | the complete generated SoC | Verilator | see below |
 | `tb/gls/` | the placed-and-routed netlist | Icarus Verilog | `tb/gls/run_gls.sh` |

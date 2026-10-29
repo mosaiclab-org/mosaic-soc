@@ -137,20 +137,20 @@ GF180 = REPO / "flow" / "librelane" / "gf180mcu"  # make -C flow/librelane clone
 TILE_GATE = ("magic__drc_error__count", "klayout__drc_error__count",
              "design__lvs_error__count", "antenna__violating__nets")
 
-# Run by FABulous's own interpreter (MOSAIC_FABULOUS_PYTHON): its tile macro
-# flow on one tile, as its gen_tile_macro command runs it. That command's
-# settings validate the PDK, which enables it through ciel, a download; here
-# the settings are built without validation (model_construct) and hold the PDK
-# clone. One worker: the flow's trials would otherwise run side by side. The
-# tools it starts get MOSAIC_FABRIC_PYTHONPATH, LibreLane built for their own
-# Python: its scripts inside OpenROAD import librelane. LibreLane runs its own
-# helper scripts as `python3` with its interpreter's sys.path, so a `python3`
-# that is this interpreter goes first on their PATH. FABulous runs Magic DRC
-# only when KLayout's found errors; MOSAIC's signoff runs both, so here Magic
-# runs whatever KLayout found.
-# Yosys's loop check stays on: the switch matrices' loops close between tiles,
-# not inside one (docs/efpga.md).
-HARDEN = '''
+# Run by FABulous's own interpreter (MOSAIC_FABULOUS_PYTHON): FABulous's tile
+# and fabric macro flows, as its gen_tile_macro and gen_fabric_macro commands
+# run them. Those commands' settings validate the PDK, which enables it through
+# ciel, a download; here the settings are built without validation
+# (model_construct) and hold the PDK clone. One worker: the flow's trials would
+# otherwise run side by side. The tools it starts get MOSAIC_FABRIC_PYTHONPATH,
+# LibreLane built for their own Python: its scripts inside OpenROAD import
+# librelane. LibreLane runs its own helper scripts as `python3` with its
+# interpreter's sys.path, so a `python3` that is this interpreter goes first on
+# their PATH. FABulous runs Magic DRC only when KLayout's found errors;
+# MOSAIC's signoff runs both, so here Magic runs whatever KLayout found.
+# argv: the project, the PDK variant, the PDK root, the output, the job (JSON).
+_DRIVER = """
+import json
 import os
 import sys
 from pathlib import Path
@@ -162,24 +162,39 @@ from fabulous.fabric_generator.gds_generator.steps.tile_area_opt import OptMode
 from fabulous.fabric_generator.gds_generator.steps.condition_magic_drc import ConditionalMagicDRC
 from librelane.steps.magic import DRC
 ConditionalMagicDRC.run = DRC.run
-proj, tile, pdk, pdk_root, out = Path(sys.argv[1]), sys.argv[2], sys.argv[3], Path(sys.argv[4]), Path(sys.argv[5])
+proj, pdk, pdk_root, out = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3]), Path(sys.argv[4])
+job = json.loads(sys.argv[5])
 fabulous_settings._context_instance = fabulous_settings.FABulousSettings.model_construct(
     proj_dir=proj, proj_lang=HDLType.VERILOG, models_pack=proj / "Fabric" / "models_pack.v",
     pdk=pdk, pdk_root=pdk_root, max_worker=1)
 os.environ["PYTHONPATH"] = os.environ["MOSAIC_FABRIC_PYTHONPATH"]
 shims = out / "bin"
-shims.mkdir(exist_ok=True)
+shims.mkdir(parents=True, exist_ok=True)
 (shims / "python3").write_text(f'#!/bin/sh\\nexec "{sys.executable}" "$@"\\n')
 (shims / "python3").chmod(0o755)
 os.environ["PATH"] = f"{shims}:{os.environ['PATH']}"
 api = FABulous_API(VerilogCodeGenerator(), str(proj / "fabric.csv"))
+"""
+# One tile. Yosys's loop check stays on: the switch matrices' loops close
+# between tiles, not inside one (docs/efpga.md).
+HARDEN = _DRIVER + """
+tile = job["tile"]
 pins = out / f"{tile}_io_pin_order.yaml"
 api.gen_io_pin_order_config(api.getTile(tile, raises_on_miss=True), pins)
 api.genTileMacro(proj / "Tile" / tile, pins, out, pdk, pdk_root, final_view=out / "final_views",
                  optimisation=OptMode.NO_OPT,
                  base_config_path=proj / "Tile" / "include" / "gds_config.yaml",
                  config_override_path=proj / "Tile" / tile / "gds_config.yaml")
-'''
+"""
+# The fabric, from the tile macros, with the project's Fabric/gds_config.yaml:
+# FABulous's template, which leaves Yosys's loop check out of the fabric (the
+# user's decision of 2026-10-29) and the clock tree, fill, taps and antenna
+# repair out of a fabric of abutted tiles that already hold their own.
+STITCH = _DRIVER + """
+api.fabric_stitching({name: Path(path) for name, path in job["macros"].items()},
+                     proj / "Fabric" / f"{api.fabric.name}.v", out, pdk, pdk_root,
+                     base_config_path=proj / "Fabric" / "gds_config.yaml")
+"""
 
 
 def _git_state(path):
@@ -187,6 +202,67 @@ def _git_state(path):
     git = ["git", "-C", str(path)]
     return [subprocess.run(git + args, capture_output=True, text=True).stdout
             for args in (["rev-parse", "HEAD"], ["status", "--porcelain", "--ignored"])]
+
+
+def _macro_flows(fabric, out, pdk_root, environ):
+    """What harden and stitch share before their first flow: the checks of the
+    fabric, the shell and the PDK clone, a fresh ``out`` with a copy of the
+    fabric's project in out/proj, the tools and their environment, and the
+    state of the clone. (python, tools, env, pdk_state)"""
+    environ = os.environ if environ is None else environ
+    if not (fabric / "manifest.json").is_file() or not (fabric / "proj").is_dir():
+        raise RuntimeError(f"{fabric}: not a fabric this script generated")
+    if fabric == out or fabric in out.parents or out in fabric.parents:
+        raise RuntimeError(f"{out}: neither inside {fabric} nor around it")
+    python = environ.get("MOSAIC_FABULOUS_PYTHON")
+    if (environ.get("MOSAIC_FABRIC_SHELL") != "librelane-3.0.11" or not python
+            or not environ.get("MOSAIC_FABRIC_PYTHONPATH")):
+        raise RuntimeError(f"the macro flows run in the fabric shell. fix: {FABRIC_FIX}")
+    if not (pdk_root / "gf180mcuD" / "libs.tech" / "librelane").is_dir():
+        raise RuntimeError(f"{pdk_root}: no gf180mcuD in it (make -C flow/librelane clone-pdk)")
+    tools, env = _prepare(out, [fabric / "manifest.json"], environ)
+    version = subprocess.run(["openroad", "-version"], env=env, capture_output=True, text=True,
+                             stdin=subprocess.DEVNULL).stdout.strip()
+    if OPENROAD not in version:
+        raise RuntimeError(f"openroad: need {OPENROAD[:10]}, found {version[:40] or 'nothing'}. "
+                           f"fix: {FABRIC_FIX}")
+    tools["openroad"] = {"version": version, "path": shutil.which("openroad", path=env.get("PATH"))}
+    shutil.copytree(fabric / "proj", out / "proj", symlinks=True)
+    return python, tools, env, _git_state(pdk_root)
+
+
+def _macro_flow(driver, job, macro, python, env, out, pdk_root, pdk_state):
+    """One flow into ``macro``, gated: {"gate", "clean", "die_area_um2"}, or
+    {"clean": False, "error"} if the flow failed. A flow that touched a PDK, or
+    changed the clone, stops everything."""
+    macro.mkdir(parents=True)
+    error = None
+    try:
+        # In the project: FABulous resolves its files against the working
+        # directory, whatever the context is given.
+        _run([python, "-c", driver, str(out / "proj"), "gf180mcuD", str(pdk_root), str(macro),
+              json.dumps(job)], env, macro / "flow.log", cwd=out / "proj")
+    except RuntimeError as err:
+        if "touched a PDK" in str(err):
+            raise
+        error = str(err).splitlines()[0]
+    if _git_state(pdk_root) != pdk_state:
+        raise RuntimeError(f"{pdk_root}: the macro flow changed the PDK clone")
+    if error:
+        return {"clean": False, "error": error}
+    metrics = json.loads((macro / "final_views" / "metrics.json").read_text())
+    gate = {key: metrics.get(key) for key in TILE_GATE}
+    return {"gate": gate, "clean": all(value == 0 for value in gate.values()),
+            "die_area_um2": metrics.get("design__die__area")}
+
+
+def _macro_manifest(out, fabric, tools, pdk_root, pdk_state, sources=(), **extra):
+    files = sorted(f for f in (out / "macro").rglob("*") if f.is_file())
+    geometry = json.loads((fabric / "manifest.json").read_text())["geometry"]
+    _manifest(out, [fabric / "manifest.json", *sources], tools, geometry, {}, files,
+              fabric={"path": str(fabric), "manifest_sha256": _sha256(fabric / "manifest.json")},
+              pdk={"path": str(pdk_root), "rev": pdk_state[0].strip(), "variant": "gf180mcuD"},
+              **extra)
 
 
 def harden(fabric, out, tiles, pdk_root=GF180, environ=None):
@@ -199,55 +275,49 @@ def harden(fabric, out, tiles, pdk_root=GF180, environ=None):
     flow fails is recorded with the first line of the error, and the next one
     runs; one that touched a PDK, or changed the clone, stops them all."""
     fabric, out, pdk_root = Path(fabric).resolve(), Path(out).resolve(), Path(pdk_root).resolve()
-    environ = os.environ if environ is None else environ
-    if not (fabric / "manifest.json").is_file() or not (fabric / "proj").is_dir():
-        raise RuntimeError(f"{fabric}: not a fabric this script generated")
-    if fabric == out or fabric in out.parents or out in fabric.parents:
-        raise RuntimeError(f"{out}: neither inside {fabric} nor around it")
-    python = environ.get("MOSAIC_FABULOUS_PYTHON")
-    if (environ.get("MOSAIC_FABRIC_SHELL") != "librelane-3.0.11" or not python
-            or not environ.get("MOSAIC_FABRIC_PYTHONPATH")):
-        raise RuntimeError(f"the tile flow runs in the fabric shell. fix: {FABRIC_FIX}")
-    if not (pdk_root / "gf180mcuD" / "libs.tech" / "librelane").is_dir():
-        raise RuntimeError(f"{pdk_root}: no gf180mcuD in it (make -C flow/librelane clone-pdk)")
-    tools, env = _prepare(out, [fabric / "manifest.json"], environ)
-    version = subprocess.run(["openroad", "-version"], env=env, capture_output=True, text=True,
-                             stdin=subprocess.DEVNULL).stdout.strip()
-    if OPENROAD not in version:
-        raise RuntimeError(f"openroad: need {OPENROAD[:10]}, found {version[:40] or 'nothing'}. "
-                           f"fix: {FABRIC_FIX}")
-    tools["openroad"] = {"version": version, "path": shutil.which("openroad", path=env.get("PATH"))}
-    shutil.copytree(fabric / "proj", out / "proj", symlinks=True)
-    pdk_state, gates = _git_state(pdk_root), {}
-    for tile in tiles:
-        macro = out / "macro" / tile
-        macro.mkdir(parents=True)
-        error = None
-        try:
-            # In the project: FABulous resolves its files against the working
-            # directory, whatever the context is given.
-            _run([python, "-c", HARDEN, str(out / "proj"), tile, "gf180mcuD", str(pdk_root),
-                  str(macro)], env, macro / "flow.log", cwd=out / "proj")
-        except RuntimeError as err:
-            if "touched a PDK" in str(err):
-                raise
-            error = str(err).splitlines()[0]
-        if _git_state(pdk_root) != pdk_state:
-            raise RuntimeError(f"{pdk_root}: the tile flow changed the PDK clone")
-        if error:
-            gates[tile] = {"clean": False, "error": error}
-            continue
-        metrics = json.loads((macro / "final_views" / "metrics.json").read_text())
-        gate = {key: metrics.get(key) for key in TILE_GATE}
-        gates[tile] = {"gate": gate, "clean": all(value == 0 for value in gate.values()),
-                       "die_area_um2": metrics.get("design__die__area")}
-    files = sorted(f for f in (out / "macro").rglob("*") if f.is_file())
-    geometry = json.loads((fabric / "manifest.json").read_text())["geometry"]
-    _manifest(out, [fabric / "manifest.json"], tools, geometry, {}, files,
-              fabric={"path": str(fabric), "manifest_sha256": _sha256(fabric / "manifest.json")},
-              pdk={"path": str(pdk_root), "rev": pdk_state[0].strip(), "variant": "gf180mcuD"},
-              tiles=gates)
+    python, tools, env, pdk_state = _macro_flows(fabric, out, pdk_root, environ)
+    gates = {tile: _macro_flow(HARDEN, {"tile": tile}, out / "macro" / tile, python, env, out,
+                               pdk_root, pdk_state) for tile in tiles}
+    _macro_manifest(out, fabric, tools, pdk_root, pdk_state, tiles=gates)
     return gates
+
+
+def _fabric_tiles(fabric):
+    """The tile types fabric.csv places, between FabricBegin and FabricEnd."""
+    rows = (fabric / "proj" / "fabric.csv").read_text().splitlines()
+    body = rows[next(i for i, r in enumerate(rows) if r.startswith("FabricBegin")) + 1:]
+    body = body[:next(i for i, r in enumerate(body) if r.startswith("FabricEnd"))]
+    return {cell.strip() for row in body for cell in row.split(",")} - {"", "NULL"}
+
+
+def stitch(fabric, out, tile_runs, pdk_root=GF180, environ=None):
+    """The fabric of a fabric this script generated, stitched by FABulous's
+    fabric macro flow from the tile macros that harden() made in ``tile_runs``,
+    in ``out``: macro/fabric/ with the final views, metrics.json and the log,
+    and manifest.json, whose "fabric" holds its TILE_GATE metrics. Every tile
+    type the fabric places needs a clean macro, from exactly one of the runs."""
+    fabric, out, pdk_root = Path(fabric).resolve(), Path(out).resolve(), Path(pdk_root).resolve()
+    macros, sources = {}, []
+    for run in map(Path, tile_runs):
+        run = run.resolve()
+        manifest = json.loads((run / "manifest.json").read_text())
+        if manifest.get("fabric", {}).get("manifest_sha256") != _sha256(fabric / "manifest.json"):
+            raise RuntimeError(f"{run}: its tiles are not of {fabric}")
+        for tile, result in manifest.get("tiles", {}).items():
+            if not result["clean"]:
+                raise RuntimeError(f"{run}: {tile} is not clean")
+            if tile in macros:
+                raise RuntimeError(f"{tile}: a macro in two runs")
+            macros[tile] = str(run / "macro" / tile / "final_views")
+        sources.append(run / "manifest.json")
+    if missing := sorted(_fabric_tiles(fabric) - set(macros)):
+        raise RuntimeError(f"no clean macro of {', '.join(missing)}")
+    python, tools, env, pdk_state = _macro_flows(fabric, out, pdk_root, environ)
+    gate = _macro_flow(STITCH, {"macros": macros}, out / "macro" / "fabric", python, env, out,
+                       pdk_root, pdk_state)
+    _macro_manifest(out, fabric, tools, pdk_root, pdk_state, sources, fabric_macro=gate,
+                    tile_macros=macros)
+    return gate
 
 
 def drop_pdk(env_file):
@@ -727,6 +797,9 @@ def main():
     parser.add_argument("--harden", action="append", default=[], metavar="TILE",
                         help="with --fabric: harden this tile type for GF180MCU with FABulous's "
                         "tile macro flow (`nix develop .#fabric`); repeatable")
+    parser.add_argument("--stitch", action="append", default=[], metavar="RUN",
+                        help="with --fabric: stitch the fabric from the tile macros of these "
+                        "--harden outputs (`nix develop .#fabric`); repeatable")
     parser.add_argument("--shell", action="append", default=[],
                         help="user design bound by the shell (docs/efpga.md): a module named "
                         "after its file, whose ports are among SHELL's; repeatable")
@@ -734,9 +807,17 @@ def main():
     if len(args.design) != len(args.wrapper):
         parser.error("--design and --wrapper go together")
     designs = list(zip(args.design, args.wrapper)) + [(shell, None) for shell in args.shell]
-    if args.harden and (not args.fabric or designs):
-        parser.error("--harden takes --fabric and no design")
+    if (args.harden or args.stitch) and (not args.fabric or designs):
+        parser.error("--harden and --stitch take --fabric and no design")
+    if args.harden and args.stitch:
+        parser.error("--harden and --stitch are separate runs")
     try:
+        if args.stitch:
+            result = stitch(args.fabric, args.out, args.stitch)
+            print(f"efpga_gen: fabric {'clean' if result['clean'] else 'NOT CLEAN'} "
+                  + (f"{result['gate']} die {result['die_area_um2']} um2" if "gate" in result
+                     else result["error"]))
+            return 0 if result["clean"] else 1
         if args.harden:
             results = harden(args.fabric, args.out, args.harden)
             for tile, result in results.items():
