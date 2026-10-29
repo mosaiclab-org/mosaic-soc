@@ -148,8 +148,8 @@ TILE_GATE = ("magic__drc_error__count", "klayout__drc_error__count",
 # that is this interpreter goes first on their PATH. FABulous runs Magic DRC
 # only when KLayout's found errors; MOSAIC's signoff runs both, so here Magic
 # runs whatever KLayout found.
-# The switch matrices hold loops that only a configuration breaks, so the tile
-# leaves Yosys's loop check out, as Greyhound's fabric does (docs/efpga.md).
+# Yosys's loop check stays on: the switch matrices' loops close between tiles,
+# not inside one (docs/efpga.md).
 HARDEN = '''
 import os
 import sys
@@ -178,8 +178,7 @@ api.gen_io_pin_order_config(api.getTile(tile, raises_on_miss=True), pins)
 api.genTileMacro(proj / "Tile" / tile, pins, out, pdk, pdk_root, final_view=out / "final_views",
                  optimisation=OptMode.NO_OPT,
                  base_config_path=proj / "Tile" / "include" / "gds_config.yaml",
-                 config_override_path=proj / "Tile" / tile / "gds_config.yaml",
-                 custom_config_overrides={"ERROR_ON_SYNTH_CHECKS": False})
+                 config_override_path=proj / "Tile" / tile / "gds_config.yaml")
 '''
 
 
@@ -196,7 +195,9 @@ def harden(fabric, out, tiles, pdk_root=GF180, environ=None):
     of the fabric's project, which the flow runs in; macro/<tile>/ with the
     final views, metrics.json and the flow's log; and manifest.json, whose
     "tiles" holds the TILE_GATE metrics of each tile and whether all are 0. The
-    fabric is not changed, and the PDK clone must not be either."""
+    fabric is not changed, and the PDK clone must not be either. A tile whose
+    flow fails is recorded with the first line of the error, and the next one
+    runs; one that touched a PDK, or changed the clone, stops them all."""
     fabric, out, pdk_root = Path(fabric).resolve(), Path(out).resolve(), Path(pdk_root).resolve()
     environ = os.environ if environ is None else environ
     if not (fabric / "manifest.json").is_file() or not (fabric / "proj").is_dir():
@@ -221,14 +222,21 @@ def harden(fabric, out, tiles, pdk_root=GF180, environ=None):
     for tile in tiles:
         macro = out / "macro" / tile
         macro.mkdir(parents=True)
+        error = None
         try:
             # In the project: FABulous resolves its files against the working
             # directory, whatever the context is given.
             _run([python, "-c", HARDEN, str(out / "proj"), tile, "gf180mcuD", str(pdk_root),
                   str(macro)], env, macro / "flow.log", cwd=out / "proj")
-        finally:
-            if _git_state(pdk_root) != pdk_state:
-                raise RuntimeError(f"{pdk_root}: the tile flow changed the PDK clone")
+        except RuntimeError as err:
+            if "touched a PDK" in str(err):
+                raise
+            error = str(err).splitlines()[0]
+        if _git_state(pdk_root) != pdk_state:
+            raise RuntimeError(f"{pdk_root}: the tile flow changed the PDK clone")
+        if error:
+            gates[tile] = {"clean": False, "error": error}
+            continue
         metrics = json.loads((macro / "final_views" / "metrics.json").read_text())
         gate = {key: metrics.get(key) for key in TILE_GATE}
         gates[tile] = {"gate": gate, "clean": all(value == 0 for value in gate.values()),
@@ -238,7 +246,7 @@ def harden(fabric, out, tiles, pdk_root=GF180, environ=None):
     _manifest(out, [fabric / "manifest.json"], tools, geometry, {}, files,
               fabric={"path": str(fabric), "manifest_sha256": _sha256(fabric / "manifest.json")},
               pdk={"path": str(pdk_root), "rev": pdk_state[0].strip(), "variant": "gf180mcuD"},
-              tiles=gates, loop_check="off for the tiles (ERROR_ON_SYNTH_CHECKS: False)")
+              tiles=gates)
     return gates
 
 
@@ -730,10 +738,12 @@ def main():
         parser.error("--harden takes --fabric and no design")
     try:
         if args.harden:
-            for tile, result in harden(args.fabric, args.out, args.harden).items():
+            results = harden(args.fabric, args.out, args.harden)
+            for tile, result in results.items():
                 print(f"efpga_gen: {tile} {'clean' if result['clean'] else 'NOT CLEAN'} "
-                      f"{result['gate']} die {result['die_area_um2']} um2")
-            return 0
+                      + (f"{result['gate']} die {result['die_area_um2']} um2" if "gate" in result
+                         else result["error"]))
+            return 0 if all(result["clean"] for result in results.values()) else 1
         if args.fabric:
             manifest = compile_designs(args.fabric, args.out, designs)
         else:

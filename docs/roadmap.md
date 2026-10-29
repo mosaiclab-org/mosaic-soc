@@ -63,8 +63,8 @@ and the TDU parks it when it does not. What follows does not exist.
 
 - **Silicon.** By FABulous's tile flow, on MOSAIC's own tiles, with Yosys's
   loop check left out of the fabric as Greyhound does (decided 2026-10-29; the
-  shell and `efpga_gen.py --harden` exist; `LUT4AB` hardened clean on
-  2026-10-29): one tile,
+  shell and `efpga_gen.py --harden` exist; the seven tile types of `small`
+  hardened clean on 2026-10-29, with the loop check on): one tile,
   every tile and the stitched fabric macro with its netlist simulated, then the
   SoC with the macro. A signoff-clean design that contains a fabric.
 

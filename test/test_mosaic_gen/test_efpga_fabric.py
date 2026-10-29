@@ -470,17 +470,16 @@ def test_the_tile_flow_refuses_a_directory_it_did_not_generate_or_no_pdk(tmp_pat
     assert not (tmp_path / "out").exists()
 
 
-def test_the_tile_flow_gets_the_pdk_itself_and_skips_only_the_loop_check():
+def test_the_tile_flow_gets_the_pdk_itself_and_turns_no_check_off():
     """FABulous's settings enable a PDK through ciel (a download) whenever
     FAB_PDK names a family ciel knows: the driver keeps that check out of the
-    context and hands the clone to the flow. The loop check is the only one
-    turned off, by the decision of 2026-10-29 (docs/efpga.md)."""
+    context and hands the clone to the flow. No check is turned off: the loop
+    check stays on for tiles, which hold no loop (docs/efpga.md)."""
     driver = efpga_gen.HARDEN
     compile(driver, "harden", "exec")  # it runs under another interpreter: check it parses
     assert "FABulousSettings.model_construct(" in driver  # no validation: no ciel
     assert "init_context" not in driver and "FAB_PDK" not in driver and "ciel." not in driver
-    assert re.findall(r'custom_config_overrides=(\{.*?\})', driver) == [
-        '{"ERROR_ON_SYNTH_CHECKS": False}']
+    assert "custom_config_overrides" not in driver and "ERROR_ON" not in driver
     assert "ConditionalMagicDRC.run = DRC.run" in driver  # Magic DRC always runs
     assert efpga_gen.TILE_GATE == ("magic__drc_error__count", "klayout__drc_error__count",
                                    "design__lvs_error__count", "antenna__violating__nets")

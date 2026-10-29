@@ -24,7 +24,7 @@ tasks through the TDU. The configuration key `soc.efpga` puts it in the SoC:
 | The shell, and the command from a user's Verilog to a simulation | `efpga_gen.py --shell`; `EFPGA_DESIGN=<design>.v tb/mosaic_soc/run_fw.sh` |
 | The firmware and the runner of the SoC test | `tb/mosaic_soc/prog_efpga/`, `tb/mosaic_soc/run_efpga.sh` |
 | The synthesis for GF180MCU | `flow/librelane/scripts/efpga_synth.sh`, `gf180_latch_map.v` |
-| The hardening of tiles for GF180MCU, one tile so far | `efpga_gen.py --harden`, `nix develop .#fabric` |
+| The hardening of tiles for GF180MCU, every tile type of `small` | `efpga_gen.py --harden`, `nix develop .#fabric` |
 | The regression steps | `efpga_fabric`, `efpga_wrapper`, `efpga_soc`, `efpga_design`, `efpga_log`, `efpga_floonoc`, `efpga_serv`, `efpga_medium`, `efpga_task`, `efpga_synth` in `scripts/run_sweep.sh` |
 
 What does not exist: a layout. The wake demonstration with the
@@ -855,9 +855,10 @@ Decided on 2026-10-29:
 - **The loop check as Greyhound settles it.** The switch matrices hold loops
   that only a configuration breaks, and Greyhound removes Yosys's loop check
   (`Checker.YosysSynthChecks`), with gate-level simulation as its evidence. The
-  tiles and the fabric macro leave it out (`ERROR_ON_SYNTH_CHECKS: False`), and
-  the fabric and wrapper benches run on the macro's netlist instead; every
-  other check stays on, for the tiles, the macro and the SoC.
+  fabric macro may leave it out, with the fabric and wrapper benches run on
+  the macro's netlist instead; every other check stays on, for the tiles, the
+  macro and the SoC. The tiles keep it on (decided after `LUT4AB`, which holds
+  no loop): the loops close between tiles.
 
 ```bash
 nix develop .#fabric --command python3 util/mosaic_gen/efpga_gen.py \
@@ -881,8 +882,22 @@ KLayout DRC 0, LVS 0, antenna 0 (two diodes inserted), routing DRC 0, and the
 GDS written by Magic and by KLayout identical (XOR 0); 4,828 cells on a die of
 92,918 µm², the template's 290 x 320 µm, at 77 % utilisation; the PDK clone
 unchanged. Yosys's check found no problem in the tile, so the loop check left
-out had nothing to leave out there: the loops close between tiles. The other
-six tile types, the stitched fabric and its netlist simulation each need the
+out had nothing to leave out there: the loops close between tiles.
+
+The six other tile types of `small` followed the same day in 22 minutes, with
+the loop check on: all clean, each with Magic and KLayout DRC 0, LVS 0,
+antenna 0, routing DRC 0 and no problem in Yosys's check.
+
+| Tile | Cells | Die (µm²) |
+|---|---|---|
+| `LUT4AB` | 4,828 | 92,918 |
+| `W_IO` | 4,233 | 102,605 |
+| `RAM_IO` | 6,214 | 102,605 |
+| `N_term_single`, `S_term_single` | 2,498, 2,450 | 72,613 each |
+| `N_term_RAM_IO`, `S_term_RAM_IO` | 2,576, 2,591 | 80,183 each |
+
+The stitched fabric macro (`FABulousFabricMacroFlow`), its netlist simulation
+with the fabric and wrapper benches, and the SoC with the macro each need the
 user's approval.
 
 Getting the flow to run took six things the shell and the script now do:
