@@ -196,7 +196,7 @@ def test_the_requirements_file_locks_the_pinned_fabulous_by_hash():
 
 def test_the_efpga_shell_installs_only_from_the_hash_locked_file():
     flake = (REPO_ROOT / "flake.nix").read_text()
-    assert "inherit sim efpga;" in flake
+    assert "inherit sim efpga fabric;" in flake
     assert '--no-build --python "$efpga_dir/venv/bin/python" --require-hashes "$efpga_req"' in flake
     assert 'efpga_req="$PWD/util/efpga-requirements.txt"' in flake
     # Of the venv only the wrapper directory is on PATH, and the wrapper drops
@@ -441,3 +441,57 @@ def test_designs_compile_only_for_a_fabric_of_this_script(tmp_path):
     (fabric / "manifest.json").write_text("{}")
     with pytest.raises(RuntimeError, match="neither inside"):
         efpga_gen.compile_designs(fabric, fabric / "out", [(design, None)], environ={})
+
+
+# ── hardening tiles for GF180MCU (harden; `nix develop .#fabric`) ──────
+
+
+def _fabric_dir(tmp_path):
+    fabric = tmp_path / "fabric"
+    (fabric / "proj").mkdir(parents=True)
+    (fabric / "manifest.json").write_text(json.dumps({"geometry": SMALL}))
+    return fabric
+
+
+def test_the_tile_flow_runs_only_in_the_fabric_shell(tmp_path):
+    with pytest.raises(RuntimeError, match=r"fabric shell. fix: nix develop \.#fabric"):
+        efpga_gen.harden(_fabric_dir(tmp_path), tmp_path / "out", ["LUT4AB"], environ={})
+    assert not (tmp_path / "out").exists()
+
+
+def test_the_tile_flow_refuses_a_directory_it_did_not_generate_or_no_pdk(tmp_path):
+    shell = {"MOSAIC_FABRIC_SHELL": "librelane-3.0.11", "MOSAIC_FABULOUS_PYTHON": "python",
+             "MOSAIC_FABRIC_PYTHONPATH": "site-packages"}
+    with pytest.raises(RuntimeError, match="not a fabric this script generated"):
+        efpga_gen.harden(tmp_path, tmp_path / "out", ["LUT4AB"], environ=shell)
+    with pytest.raises(RuntimeError, match="no gf180mcuD in it"):
+        efpga_gen.harden(_fabric_dir(tmp_path), tmp_path / "out", ["LUT4AB"],
+                         pdk_root=tmp_path / "nopdk", environ=shell)
+    assert not (tmp_path / "out").exists()
+
+
+def test_the_tile_flow_gets_the_pdk_itself_and_skips_only_the_loop_check():
+    """FABulous's settings enable a PDK through ciel (a download) whenever
+    FAB_PDK names a family ciel knows: the driver keeps that check out of the
+    context and hands the clone to the flow. The loop check is the only one
+    turned off, by the decision of 2026-10-29 (docs/efpga.md)."""
+    driver = efpga_gen.HARDEN
+    compile(driver, "harden", "exec")  # it runs under another interpreter: check it parses
+    assert "FABulousSettings.model_construct(" in driver  # no validation: no ciel
+    assert "init_context" not in driver and "FAB_PDK" not in driver and "ciel." not in driver
+    assert re.findall(r'custom_config_overrides=(\{.*?\})', driver) == [
+        '{"ERROR_ON_SYNTH_CHECKS": False}']
+    assert "ConditionalMagicDRC.run = DRC.run" in driver  # Magic DRC always runs
+    assert efpga_gen.TILE_GATE == ("magic__drc_error__count", "klayout__drc_error__count",
+                                   "design__lvs_error__count", "antenna__violating__nets")
+
+
+def test_the_fabric_shell_takes_librelane_3_0_11_on_the_signoff_nix_eda():
+    flake = (REPO_ROOT / "flake.nix").read_text()
+    assert 'librelane-fabric.url = "github:librelane/librelane/3.0.11";' in flake
+    assert 'librelane-fabric.inputs.nix-eda.follows = "librelane/nix-eda";' in flake
+    assert 'librelane.url = "github:librelane/librelane/3.0.0";' in flake  # signoff unchanged
+    assert "unset PDK_ROOT PDK PDKPATH FAB_PDK FAB_PDK_ROOT" in flake
+    lock = json.loads((REPO_ROOT / "flake.lock").read_text())["nodes"]
+    assert lock["librelane-fabric"]["inputs"]["nix-eda"] == ["librelane", "nix-eda"]
+    assert lock["librelane-fabric"]["locked"]["rev"].startswith("33ab64861c55")

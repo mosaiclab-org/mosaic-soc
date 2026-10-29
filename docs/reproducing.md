@@ -14,6 +14,8 @@ nix develop .#sim        # simulation: Verilator 5.050, RISC-V GCC, Icarus, coco
 nix develop .#physical   # the LibreLane 3.0.0 shell (same as flow/librelane's)
 nix develop .#efpga      # the eFPGA fabric tools: FABulous 2.2.0, Yosys 0.62,
                          # nextpnr-generic 0.9
+nix develop .#fabric     # the efpga shell, plus LibreLane 3.0.11's tools for
+                         # hardening the fabric's tiles
 ```
 
 | Tool | Version | Source |
@@ -26,6 +28,7 @@ nix develop .#efpga      # the eFPGA fabric tools: FABulous 2.2.0, Yosys 0.62,
 | Icarus, cocotb, verible | nix-eda 6.11 / nixpkgs 25.11 | |
 | FABulous (eFPGA) | 2.2.0 | PyPI, by hash: `util/efpga-requirements.txt` |
 | Yosys, nextpnr-generic (eFPGA) | 0.62 / 0.9 | nix-eda 6.11 / nixpkgs 25.11 |
+| LibreLane (eFPGA tiles) | 3.0.11 | `github:librelane/librelane/3.0.11`, its nix-eda following 3.0.0's |
 
 Why these pins:
 
@@ -75,6 +78,29 @@ enter this shell by themselves. `util/mosaic_gen/efpga_gen.py`
 checks the three versions before it runs anything and refuses others;
 `mosaic doctor` does not check them. [efpga.md](efpga.md) describes what the
 tools produce.
+
+### The fabric shell
+
+`nix develop .#fabric` is the eFPGA shell plus the tools LibreLane 3.0.11 lists
+for itself (`includedTools`): OpenSTA, Yosys, OpenROAD, Netgen, Magic, KLayout,
+Icarus and Verilator. FABulous 2.2.0 pins LibreLane 3.0.11, whose wheel is in
+the eFPGA environment, and drives it to harden tiles. 3.0.11 locks the same
+nix-eda as 3.0.0 (6.11.0, `8f990fb`) and pins the same OpenROAD (`dcf36133`)
+and OpenSTA (`857316ff`); the input's nix-eda follows the signoff flow's, so
+on 2026-10-29 the shell built its own derivations and fetched only loguru.
+LibreLane's tools come first on `PATH`: its `yosys` is the Yosys 0.62 build
+with the Python packages LibreLane's scripts import. Its Verilator is
+LibreLane's 5.044, as in the physical shell. The shell drops `PDK_ROOT`, `PDK`,
+`PDKPATH`, `FAB_PDK` and `FAB_PDK_ROOT`, and names two things for
+`efpga_gen.py --harden`: `MOSAIC_FABULOUS_PYTHON`, the environment's
+interpreter through a wrapper kept off `PATH`, and `MOSAIC_FABRIC_PYTHONPATH`,
+which the tools get as `PYTHONPATH`. FABulous's flow runs scripts inside
+OpenROAD's Python 3.13 that import librelane and some of FABulous's own
+modules, while FABulous itself lives in the 3.12 environment: the path holds
+LibreLane 3.0.11 and loguru built for 3.13 (LibreLane's test suite is skipped
+in that build) and a directory whose one entry links to the environment's
+`fabulous` package, pure Python on that path. The signoff flow stays on
+LibreLane 3.0.0.
 
 ### The testbench runners refuse, they don't guess
 

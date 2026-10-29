@@ -24,6 +24,7 @@ tasks through the TDU. The configuration key `soc.efpga` puts it in the SoC:
 | The shell, and the command from a user's Verilog to a simulation | `efpga_gen.py --shell`; `EFPGA_DESIGN=<design>.v tb/mosaic_soc/run_fw.sh` |
 | The firmware and the runner of the SoC test | `tb/mosaic_soc/prog_efpga/`, `tb/mosaic_soc/run_efpga.sh` |
 | The synthesis for GF180MCU | `flow/librelane/scripts/efpga_synth.sh`, `gf180_latch_map.v` |
+| The hardening of tiles for GF180MCU, one tile so far | `efpga_gen.py --harden`, `nix develop .#fabric` |
 | The regression steps | `efpga_fabric`, `efpga_wrapper`, `efpga_soc`, `efpga_design`, `efpga_log`, `efpga_floonoc`, `efpga_serv`, `efpga_medium`, `efpga_task`, `efpga_synth` in `scripts/run_sweep.sh` |
 
 What does not exist: a layout. The wake demonstration with the
@@ -835,6 +836,63 @@ depend on the design loaded. The clock gate of the wrapper is GF180MCU's
 `icgtp_1` (`hw/asic/gf180/tc_clk.sv`), not the behavioural model the benches
 simulate. `medium` was not synthesised. The sweep step took 154 s.
 
+## Hardening for GF180MCU
+
+The fabric goes to silicon by the route that has worked there: FABulous's tile
+flow, which hardens each tile type as a macro and stitches them into the
+fabric. Greyhound, a RISC-V SoC with a FABulous fabric on IHP SG13G2, was built
+this way, taped out in April 2025 and brought up in May 2026 running designs on
+its fabric ([FOSSi Foundation, 2026-05-12](https://fossi.foundation/blog/2026-05-12-ecl97));
+the GF180 reference `gf180mcu-fabulous-fpga` is built the same way.
+Decided on 2026-10-29:
+
+- **MOSAIC's own tiles.** The template tiles `small` uses (`LUT4AB`, `W_IO`,
+  `RAM_IO` and four terminal tiles) are hardened with the tile flow, from the
+  GF180 sizes and settings FABulous 2.2.0's project template already holds
+  (`Tile/include/gds_config.yaml`, `Tile/<tile>/gds_config.yaml`). The
+  reference's hardened tiles are not these: their Verilog and switch matrices
+  differ and it has no `RAM_IO`.
+- **The loop check as Greyhound settles it.** The switch matrices hold loops
+  that only a configuration breaks, and Greyhound removes Yosys's loop check
+  (`Checker.YosysSynthChecks`), with gate-level simulation as its evidence. The
+  tiles and the fabric macro leave it out (`ERROR_ON_SYNTH_CHECKS: False`), and
+  the fabric and wrapper benches run on the macro's netlist instead; every
+  other check stays on, for the tiles, the macro and the SoC.
+
+```bash
+nix develop .#fabric --command python3 util/mosaic_gen/efpga_gen.py \
+    --fabric build/efpga/small --harden LUT4AB --out build/efpga_harden/small
+```
+
+`--harden` copies the fabric's project into `--out` and runs FABulous's tile
+macro flow on each tile named, with LibreLane 3.0.11 ([the fabric
+shell](reproducing.md#the-fabric-shell)) and the PDK clone `flow/librelane/gf180mcu`
+(`harden` in `efpga_gen.py`). FABulous's own `gen_tile_macro` command would
+first enable a PDK through ciel, a download into the PDK root; the script
+calls the flow itself with the clone, and fails if the clone changed. It writes
+`macro/<tile>/` (the final views, `metrics.json`, `flow.log`) and a
+`manifest.json` whose `tiles` holds, per tile, the four metrics that must be
+0: Magic and KLayout DRC errors, LVS errors and antenna violations. A metric
+the flow did not report fails the tile: FABulous runs Magic DRC only when
+KLayout's found errors, so the script makes it run every time.
+
+Measured on 2026-10-29, `LUT4AB` of `small` in 15 minutes: clean. Magic and
+KLayout DRC 0, LVS 0, antenna 0 (two diodes inserted), routing DRC 0, and the
+GDS written by Magic and by KLayout identical (XOR 0); 4,828 cells on a die of
+92,918 µm², the template's 290 x 320 µm, at 77 % utilisation; the PDK clone
+unchanged. Yosys's check found no problem in the tile, so the loop check left
+out had nothing to leave out there: the loops close between tiles. The other
+six tile types, the stitched fabric and its netlist simulation each need the
+user's approval.
+
+Getting the flow to run took six things the shell and the script now do:
+LibreLane's tools first on `PATH` (its Yosys has the Python packages its
+scripts import); LibreLane, loguru and FABulous's pure-Python modules on the
+`PYTHONPATH` of OpenROAD's Python, where FABulous's scripts run; `libexpat` for
+the `klayout` wheel; a `python3` that is FABulous's interpreter, for
+LibreLane's own helper scripts; FABulous's settings built without validation,
+which would enable a PDK through ciel; and Magic DRC unconditional.
+
 ## Tools
 
 | Tool | Version | Source |
@@ -844,6 +902,7 @@ simulate. `medium` was not synthesised. The sweep step took 154 s.
 | nextpnr-generic | 0.9 | nixpkgs, the revision in `flake.lock` |
 | `bit_gen` | FABulous-bit-gen 0.3.1 | the same requirements file |
 | Yosys with `slang`, OpenSTA | 0.62, 2.7.0 | `nix develop .#physical`, for the [synthesis](#synthesis) only |
+| LibreLane | 3.0.11 | `nix develop .#fabric`, for the [hardening](#hardening-for-gf180mcu) only |
 
 [reproducing.md](reproducing.md) describes the shell.
 

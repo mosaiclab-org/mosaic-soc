@@ -12,7 +12,9 @@ optionally compiles user designs to bitstreams for that fabric (Yosys
 generated before, such as the one in a SoC's bundle, and writes no fabric.
 A design comes with its own top_wrapper (``--design``/``--wrapper``), or is
 bound by the shell of the preset, a top_wrapper generated from its ports
-(``--shell``; SHELL, shell_wrapper).
+(``--shell``; SHELL, shell_wrapper). With ``--fabric`` and ``--harden TILE``
+it hardens tiles of that fabric for GF180MCU with FABulous's tile macro flow
+instead (harden; `nix develop .#fabric`).
 
 Everything is written under ``--out`` (a directory below ``build/``, never
 committed), which is deleted first so that every file in it comes from this
@@ -125,6 +127,119 @@ def check_tools(env):
         if not tool["path"]:
             raise RuntimeError(f"{name}: not found. fix: {FIX}")
     return found
+
+
+FABRIC_FIX = "nix develop .#fabric   (see docs/efpga.md)"
+OPENROAD = "dcf36133a369abc8f3c5e5738cd4d82e4903c0e0"  # LibreLane 3.0.0's and 3.0.11's
+GF180 = REPO / "flow" / "librelane" / "gf180mcu"  # make -C flow/librelane clone-pdk
+# The metrics of a hardened tile that must all be 0. A metric the flow did not
+# report fails the tile: not measured is not clean.
+TILE_GATE = ("magic__drc_error__count", "klayout__drc_error__count",
+             "design__lvs_error__count", "antenna__violating__nets")
+
+# Run by FABulous's own interpreter (MOSAIC_FABULOUS_PYTHON): its tile macro
+# flow on one tile, as its gen_tile_macro command runs it. That command's
+# settings validate the PDK, which enables it through ciel, a download; here
+# the settings are built without validation (model_construct) and hold the PDK
+# clone. One worker: the flow's trials would otherwise run side by side. The
+# tools it starts get MOSAIC_FABRIC_PYTHONPATH, LibreLane built for their own
+# Python: its scripts inside OpenROAD import librelane. LibreLane runs its own
+# helper scripts as `python3` with its interpreter's sys.path, so a `python3`
+# that is this interpreter goes first on their PATH. FABulous runs Magic DRC
+# only when KLayout's found errors; MOSAIC's signoff runs both, so here Magic
+# runs whatever KLayout found.
+# The switch matrices hold loops that only a configuration breaks, so the tile
+# leaves Yosys's loop check out, as Greyhound's fabric does (docs/efpga.md).
+HARDEN = '''
+import os
+import sys
+from pathlib import Path
+from fabulous import fabulous_settings
+from fabulous.fabric_definition.define import HDLType
+from fabulous.fabulous_api import FABulous_API
+from fabulous.fabric_generator.code_generator.code_generator_Verilog import VerilogCodeGenerator
+from fabulous.fabric_generator.gds_generator.steps.tile_area_opt import OptMode
+from fabulous.fabric_generator.gds_generator.steps.condition_magic_drc import ConditionalMagicDRC
+from librelane.steps.magic import DRC
+ConditionalMagicDRC.run = DRC.run
+proj, tile, pdk, pdk_root, out = Path(sys.argv[1]), sys.argv[2], sys.argv[3], Path(sys.argv[4]), Path(sys.argv[5])
+fabulous_settings._context_instance = fabulous_settings.FABulousSettings.model_construct(
+    proj_dir=proj, proj_lang=HDLType.VERILOG, models_pack=proj / "Fabric" / "models_pack.v",
+    pdk=pdk, pdk_root=pdk_root, max_worker=1)
+os.environ["PYTHONPATH"] = os.environ["MOSAIC_FABRIC_PYTHONPATH"]
+shims = out / "bin"
+shims.mkdir(exist_ok=True)
+(shims / "python3").write_text(f'#!/bin/sh\\nexec "{sys.executable}" "$@"\\n')
+(shims / "python3").chmod(0o755)
+os.environ["PATH"] = f"{shims}:{os.environ['PATH']}"
+api = FABulous_API(VerilogCodeGenerator(), str(proj / "fabric.csv"))
+pins = out / f"{tile}_io_pin_order.yaml"
+api.gen_io_pin_order_config(api.getTile(tile, raises_on_miss=True), pins)
+api.genTileMacro(proj / "Tile" / tile, pins, out, pdk, pdk_root, final_view=out / "final_views",
+                 optimisation=OptMode.NO_OPT,
+                 base_config_path=proj / "Tile" / "include" / "gds_config.yaml",
+                 config_override_path=proj / "Tile" / tile / "gds_config.yaml",
+                 custom_config_overrides={"ERROR_ON_SYNTH_CHECKS": False})
+'''
+
+
+def _git_state(path):
+    """HEAD and the changed files of a git checkout, to see that nothing wrote in it."""
+    git = ["git", "-C", str(path)]
+    return [subprocess.run(git + args, capture_output=True, text=True).stdout
+            for args in (["rev-parse", "HEAD"], ["status", "--porcelain", "--ignored"])]
+
+
+def harden(fabric, out, tiles, pdk_root=GF180, environ=None):
+    """Each tile of ``tiles`` of a fabric this script generated, hardened for
+    GF180MCU (gf180mcuD) by FABulous's tile macro flow, in ``out``: proj/, a copy
+    of the fabric's project, which the flow runs in; macro/<tile>/ with the
+    final views, metrics.json and the flow's log; and manifest.json, whose
+    "tiles" holds the TILE_GATE metrics of each tile and whether all are 0. The
+    fabric is not changed, and the PDK clone must not be either."""
+    fabric, out, pdk_root = Path(fabric).resolve(), Path(out).resolve(), Path(pdk_root).resolve()
+    environ = os.environ if environ is None else environ
+    if not (fabric / "manifest.json").is_file() or not (fabric / "proj").is_dir():
+        raise RuntimeError(f"{fabric}: not a fabric this script generated")
+    if fabric == out or fabric in out.parents or out in fabric.parents:
+        raise RuntimeError(f"{out}: neither inside {fabric} nor around it")
+    python = environ.get("MOSAIC_FABULOUS_PYTHON")
+    if (environ.get("MOSAIC_FABRIC_SHELL") != "librelane-3.0.11" or not python
+            or not environ.get("MOSAIC_FABRIC_PYTHONPATH")):
+        raise RuntimeError(f"the tile flow runs in the fabric shell. fix: {FABRIC_FIX}")
+    if not (pdk_root / "gf180mcuD" / "libs.tech" / "librelane").is_dir():
+        raise RuntimeError(f"{pdk_root}: no gf180mcuD in it (make -C flow/librelane clone-pdk)")
+    tools, env = _prepare(out, [fabric / "manifest.json"], environ)
+    version = subprocess.run(["openroad", "-version"], env=env, capture_output=True, text=True,
+                             stdin=subprocess.DEVNULL).stdout.strip()
+    if OPENROAD not in version:
+        raise RuntimeError(f"openroad: need {OPENROAD[:10]}, found {version[:40] or 'nothing'}. "
+                           f"fix: {FABRIC_FIX}")
+    tools["openroad"] = {"version": version, "path": shutil.which("openroad", path=env.get("PATH"))}
+    shutil.copytree(fabric / "proj", out / "proj", symlinks=True)
+    pdk_state, gates = _git_state(pdk_root), {}
+    for tile in tiles:
+        macro = out / "macro" / tile
+        macro.mkdir(parents=True)
+        try:
+            # In the project: FABulous resolves its files against the working
+            # directory, whatever the context is given.
+            _run([python, "-c", HARDEN, str(out / "proj"), tile, "gf180mcuD", str(pdk_root),
+                  str(macro)], env, macro / "flow.log", cwd=out / "proj")
+        finally:
+            if _git_state(pdk_root) != pdk_state:
+                raise RuntimeError(f"{pdk_root}: the tile flow changed the PDK clone")
+        metrics = json.loads((macro / "final_views" / "metrics.json").read_text())
+        gate = {key: metrics.get(key) for key in TILE_GATE}
+        gates[tile] = {"gate": gate, "clean": all(value == 0 for value in gate.values()),
+                       "die_area_um2": metrics.get("design__die__area")}
+    files = sorted(f for f in (out / "macro").rglob("*") if f.is_file())
+    geometry = json.loads((fabric / "manifest.json").read_text())["geometry"]
+    _manifest(out, [fabric / "manifest.json"], tools, geometry, {}, files,
+              fabric={"path": str(fabric), "manifest_sha256": _sha256(fabric / "manifest.json")},
+              pdk={"path": str(pdk_root), "rev": pdk_state[0].strip(), "variant": "gf180mcuD"},
+              tiles=gates, loop_check="off for the tiles (ERROR_ON_SYNTH_CHECKS: False)")
+    return gates
 
 
 def drop_pdk(env_file):
@@ -601,6 +716,9 @@ def main():
                         help="user design (Verilog) to compile to a bitstream; repeatable")
     parser.add_argument("--wrapper", action="append", default=[],
                         help="its top_wrapper, which binds it to the preset; one per --design")
+    parser.add_argument("--harden", action="append", default=[], metavar="TILE",
+                        help="with --fabric: harden this tile type for GF180MCU with FABulous's "
+                        "tile macro flow (`nix develop .#fabric`); repeatable")
     parser.add_argument("--shell", action="append", default=[],
                         help="user design bound by the shell (docs/efpga.md): a module named "
                         "after its file, whose ports are among SHELL's; repeatable")
@@ -608,7 +726,14 @@ def main():
     if len(args.design) != len(args.wrapper):
         parser.error("--design and --wrapper go together")
     designs = list(zip(args.design, args.wrapper)) + [(shell, None) for shell in args.shell]
+    if args.harden and (not args.fabric or designs):
+        parser.error("--harden takes --fabric and no design")
     try:
+        if args.harden:
+            for tile, result in harden(args.fabric, args.out, args.harden).items():
+                print(f"efpga_gen: {tile} {'clean' if result['clean'] else 'NOT CLEAN'} "
+                      f"{result['gate']} die {result['die_area_um2']} um2")
+            return 0
         if args.fabric:
             manifest = compile_designs(args.fabric, args.out, designs)
         else:
