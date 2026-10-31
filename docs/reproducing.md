@@ -100,7 +100,7 @@ modules, while FABulous itself lives in the 3.12 environment: the path holds
 LibreLane 3.0.11 and loguru built for 3.13 (LibreLane's test suite is skipped
 in that build) and a directory whose one entry links to the environment's
 `fabulous` package, pure Python on that path. The signoff flow stays on
-LibreLane 3.0.0.
+LibreLane 3.0.0. `tb/efpga/run_netlist.sh` enters this shell by itself.
 
 ### The testbench runners refuse, they don't guess
 

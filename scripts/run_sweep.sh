@@ -12,13 +12,15 @@
 # path itself; the full-SoC build has to find the same headers on its own.
 #
 # Usage:
-#   scripts/run_sweep.sh                 # everything (~40 min)
+#   scripts/run_sweep.sh                 # everything but the opt-in steps (~40 min)
 #   scripts/run_sweep.sh --list          # print the step names and exit
 #   scripts/run_sweep.sh --only wake     # steps whose name matches a regex
+#   scripts/run_sweep.sh --only efpga_netlist   # an opt-in step: named in full
 #   SWEEP_LOGS=/path scripts/run_sweep.sh
 #
 # Exits NON-ZERO if any step fails, so it can gate a merge. Steps are never
-# skipped silently: --only reports what it excluded.
+# skipped silently: the summary names what --only excluded and the opt-in
+# steps it did not run.
 set -uo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO" || exit 1
@@ -30,7 +32,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --list) LIST_ONLY=1; shift ;;
     --only) ONLY="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -68,6 +70,7 @@ STEPS=(
   "efpga_medium|^### RESULT: EXIT SUCCESS.* with shell_regs.v in its eFPGA, checked by shell_regs_test.c, warm reboots: 0 |MOSAIC_CFG=configs/mosaic_efpga_medium.yaml EFPGA_DESIGN=tb/efpga/shell_regs.v EFPGA_TEST=tb/efpga/shell_regs_test.c tb/mosaic_soc/run_fw.sh"
   "efpga_task|^### RESULT: EXIT SUCCESS.* with task_count.v in its eFPGA, checked by task_count_test.c, warm reboots: 0 |MOSAIC_CFG=configs/mosaic_efpga_demo.yaml EFPGA_DESIGN=tb/efpga/task_count.v EFPGA_TEST=tb/efpga/task_count_test.c tb/mosaic_soc/run_fw.sh"
   "efpga_synth|^SYNTH PASS preset=small |flow/librelane/scripts/efpga_synth.sh small"
+  "efpga_netlist|^TB PASS netlist=small |tb/efpga/run_netlist.sh"
 
   "wake_obi|$EXIT_OK|tb/mosaic_soc/run.sh"
   "wake_log|$EXIT_OK|MOSAIC_CFG=configs/mosaic_wake_demo_log.yaml tb/mosaic_soc/run.sh"
@@ -92,8 +95,17 @@ STEPS=(
   "demo03_blocka_prompt|RESULT: prompt|MOSAIC_DEMO_AGENT=off ./demo/03_blocka_from_prompt.sh"
 )
 
+# Steps too long for every sweep (a regex of whole names): they run only when
+# --only matches the whole name, not a part of it. efpga_netlist hardens the
+# fabric of small for GF180MCU and simulates its netlist, about 3.5 hours.
+OPT_IN="efpga_netlist"
+opt_in() { printf '%s' "$1" | grep -qxE "$OPT_IN" && ! printf '%s' "$1" | grep -qxE "${ONLY:-^$}"; }
+
 if [ "$LIST_ONLY" = 1 ]; then
-  for entry in "${STEPS[@]}"; do echo "${entry%%|*}"; done
+  for entry in "${STEPS[@]}"; do
+    name="${entry%%|*}"
+    if printf '%s' "$name" | grep -qxE "$OPT_IN"; then echo "$name (opt-in)"; else echo "$name"; fi
+  done
   exit 0
 fi
 
@@ -101,6 +113,7 @@ mkdir -p "$LOGS"
 RESULTS="$LOGS/results.tsv"
 : > "$RESULTS"
 EXCLUDED=0
+OPTED=""
 
 for entry in "${STEPS[@]}"; do
   name="${entry%%|*}"
@@ -110,6 +123,10 @@ for entry in "${STEPS[@]}"; do
 
   if [ -n "$ONLY" ] && ! printf '%s' "$name" | grep -qE "$ONLY"; then
     EXCLUDED=$((EXCLUDED + 1))
+    continue
+  fi
+  if opt_in "$name"; then
+    OPTED="$OPTED $name"
     continue
   fi
 
@@ -142,6 +159,7 @@ awk -F'\t' -v excluded="$EXCLUDED" '
     if (excluded > 0) printf "NOT RUN: %d step(s) excluded by --only\n", excluded
     if (fail > 0) printf "failing steps:%s\n", failed
   }' "$RESULTS"
+[ -z "$OPTED" ] || echo "NOT RUN (opt-in, --only <name> runs it):$OPTED"
 echo "logs: $LOGS"
 
 # Non-zero if anything failed — without this the script is unusable as a gate,

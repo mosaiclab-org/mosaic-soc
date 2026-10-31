@@ -137,6 +137,30 @@ GF180 = REPO / "flow" / "librelane" / "gf180mcu"  # make -C flow/librelane clone
 TILE_GATE = ("magic__drc_error__count", "klayout__drc_error__count",
              "design__lvs_error__count", "antenna__violating__nets")
 
+# FABulous's tile flow sizes no driver and buffers no net, and the fabric it
+# makes fails the library's slew and capacitance limits at every corner
+# (docs/efpga.md). Its loop takes a step by configuration: OpenROAD's repair_design
+# after global placement, as in LibreLane's Classic flow, against the limits of
+# the tile's SDC. The port diodes move after it: FABulous places them first, and
+# to repair_design a diode is one more load to put behind its buffer, which
+# leaves the port's wire unprotected. The library's delay cells stay out: they
+# are the weakest buffers it offers, so repair_design takes them and a net gets a
+# slow, large cell where it asked for drive. A port drives its wire in the
+# neighbour and up to ten of the neighbour's multiplexers, not the PDK's 72.91 fF:
+# at 100 fF repair_design drives a port through a buf_4 (it never resizes), where
+# a buf_1 is otherwise left at 0.28 pF against a limit of 0.25. Legalising what it
+# placed moves cells up to 157 um in LUT4AB, and nets it left within the limits
+# end over the library's: it runs again after global routing, as in the Classic
+# flow, on wires that exist. Routing the buffers takes LUT4AB past FABulous's 900 s
+# limit on detailed routing, which kills it one violation from clean.
+TILE_CONFIG = {"FABULOUS_LOOP_SUBSTITUTE_STEPS": {"FABulous.DiodesOnPorts": None,
+                                                  "+OpenROAD.AddBuffers": "OpenROAD.RepairDesignPostGPL",
+                                                  "+OpenROAD.RepairDesignPostGPL": "FABulous.DiodesOnPorts",
+                                                  "+OpenROAD.GlobalRouting": "OpenROAD.RepairDesignPostGRT"},
+               "EXTRA_EXCLUDED_CELLS": ["gf180mcu_fd_sc_mcu7t5v0__dly*"],
+               "OUTPUT_CAP_LOAD": 100,
+               "FABULOUS_DRT_TIMEOUT": 3600}
+
 # Run by FABulous's own interpreter (MOSAIC_FABULOUS_PYTHON): FABulous's tile
 # and fabric macro flows, as its gen_tile_macro and gen_fabric_macro commands
 # run them. Those commands' settings validate the PDK, which enables it through
@@ -184,7 +208,8 @@ api.gen_io_pin_order_config(api.getTile(tile, raises_on_miss=True), pins)
 api.genTileMacro(proj / "Tile" / tile, pins, out, pdk, pdk_root, final_view=out / "final_views",
                  optimisation=OptMode.NO_OPT,
                  base_config_path=proj / "Tile" / "include" / "gds_config.yaml",
-                 config_override_path=proj / "Tile" / tile / "gds_config.yaml")
+                 config_override_path=proj / "Tile" / tile / "gds_config.yaml",
+                 custom_config_overrides=job["config"])
 """
 # The fabric, from the tile macros, with the project's Fabric/gds_config.yaml:
 # FABulous's template, which leaves Yosys's loop check out of the fabric (the
@@ -276,8 +301,8 @@ def harden(fabric, out, tiles, pdk_root=GF180, environ=None):
     runs; one that touched a PDK, or changed the clone, stops them all."""
     fabric, out, pdk_root = Path(fabric).resolve(), Path(out).resolve(), Path(pdk_root).resolve()
     python, tools, env, pdk_state = _macro_flows(fabric, out, pdk_root, environ)
-    gates = {tile: _macro_flow(HARDEN, {"tile": tile}, out / "macro" / tile, python, env, out,
-                               pdk_root, pdk_state) for tile in tiles}
+    gates = {tile: _macro_flow(HARDEN, {"tile": tile, "config": TILE_CONFIG}, out / "macro" / tile,
+                               python, env, out, pdk_root, pdk_state) for tile in tiles}
     _macro_manifest(out, fabric, tools, pdk_root, pdk_state, tiles=gates)
     return gates
 

@@ -24,15 +24,16 @@ tasks through the TDU. The configuration key `soc.efpga` puts it in the SoC:
 | The shell, and the command from a user's Verilog to a simulation | `efpga_gen.py --shell`; `EFPGA_DESIGN=<design>.v tb/mosaic_soc/run_fw.sh` |
 | The firmware and the runner of the SoC test | `tb/mosaic_soc/prog_efpga/`, `tb/mosaic_soc/run_efpga.sh` |
 | The synthesis for GF180MCU | `flow/librelane/scripts/efpga_synth.sh`, `gf180_latch_map.v` |
-| The hardening for GF180MCU: every tile type of `small` and the stitched fabric macro, whose netlist the two benches simulate | `efpga_gen.py --harden` and `--stitch`, `nix develop .#fabric`; `EFPGA_NETLIST` of `tb/efpga/run.sh` and `run_wrapper.sh` |
-| The regression steps | `efpga_fabric`, `efpga_wrapper`, `efpga_soc`, `efpga_design`, `efpga_log`, `efpga_floonoc`, `efpga_serv`, `efpga_medium`, `efpga_task`, `efpga_synth` in `scripts/run_sweep.sh` |
+| The hardening for GF180MCU: every tile type of `small` and the stitched fabric macro, whose netlist the two benches simulate, and its static timing | `efpga_gen.py --harden` and `--stitch`, `nix develop .#fabric`; `EFPGA_NETLIST` of `tb/efpga/run.sh` and `run_wrapper.sh`; `tb/efpga/run_netlist.sh`; `flow/librelane/scripts/efpga_sta.sh` |
+| The regression steps | `efpga_fabric`, `efpga_wrapper`, `efpga_soc`, `efpga_design`, `efpga_log`, `efpga_floonoc`, `efpga_serv`, `efpga_medium`, `efpga_task`, `efpga_synth`, and `efpga_netlist`, run only when named, in `scripts/run_sweep.sh` |
 
 What does not exist: a layout of a SoC with the fabric. The wake
 demonstration with the fabric has been simulated on each of the three buses,
 the wrapper and the fabric of `small` have been synthesised for GF180MCU
 ([Synthesis](#synthesis)), and the fabric of `small` has been hardened alone,
 as a macro clean in DRC, LVS and antenna whose netlist passes the benches of
-the fabric and of the wrapper; its timing has not been analysed
+the fabric and of the wrapper. It meets the library's slew and capacitance
+limits at nine corners; a design's own paths are not timed
 ([Hardening](#hardening-for-gf180mcu)). A design is replaced through its unload stream; `clear` does not
 remove a design that has run safely, and a reset keeps it ([Limits](#limits)).
 
@@ -957,14 +958,97 @@ Measured on 2026-10-29, both pass, each run with the result it has on the
 RTL. The fabric bench: 8 runs in 7.6 minutes, of which about 5 build the model
 (1.5 GB with two jobs) and each run takes about 14 s. The wrapper bench: 30
 runs in 2.5 hours, from seconds to 16 minutes a run (`regs`), 1.6 GB at most.
-Neither is part of the sweep: they need the hardened tiles and the stitched
-macro, about 50 minutes of the physical flow.
+The sweep step `efpga_netlist` (`tb/efpga/run_netlist.sh`) runs both from
+nothing: it generates the fabric, hardens its seven tile types, stitches the
+macro, times it (below) and runs the two benches on its netlist. It runs only
+when named (`scripts/run_sweep.sh --only efpga_netlist`): on 2026-10-31, on the
+repaired tiles below, it passed in 3.7 hours (13,218 s), 1.5 GB at most.
 
-Timing is not checked, here or in the flow. FABulous's tile and fabric macro
-flows have no static timing step: LibreLane's setup, hold, slew and
-capacitance checkers run in both, find no metric (`No metrics found`) and
-pass. The gate of `--harden` and `--stitch` is the four physical metrics
-alone, and the macro is clean in them, not in timing ([Limits](#limits)).
+FABulous's tile and fabric macro flows check no timing. They have no static
+timing step: LibreLane's setup, hold, slew and capacitance checkers run in
+both, find no metric (`No metrics found`) and pass. Their tile flow also has
+no design repair: no step sizes a driver or buffers a net, and the fabric it
+makes fails the library's limits at every corner (the table below).
+`efpga_gen.py` adds the repair through the flow's own setting for the steps of
+its loop (`TILE_CONFIG`, passed to every `--harden`); no check is turned off.
+The gate of `--harden` and `--stitch` is still the four physical metrics, and
+the timing is `efpga_sta.sh`. Each part of `TILE_CONFIG` answers a failure
+measured on the way:
+
+- **`repair_design` twice**, after global placement and after global routing,
+  as in LibreLane's Classic flow, against the limits of the tile's SDC (3 ns,
+  0.2 pF, fan-out 10). After the first pass alone, legalising its buffers moved
+  cells up to 157 µm in `LUT4AB`, and three nets it had left within the limits
+  ended over the library's: 136 slew and 32 capacitance violations in the
+  fabric.
+- **The port diodes after the first repair.** FABulous places them before
+  global placement, and to `repair_design` a diode is one more load to put
+  behind its buffer, which leaves the port's wire unprotected. The stitched
+  fabric's antenna check then failed on `FrameStrobe[0]` (Metal2, ratio 545
+  against 400). The second repair still moves a few (98 of 103 inputs of
+  `W_IO` and 179 of 189 of `RAM_IO` keep their diode), and the check passes.
+- **No delay cells** (`EXTRA_EXCLUDED_CELLS`). The library's `dly*` are buffers
+  to the resizer, which takes the weakest: 205 of 283 repair buffers in
+  `LUT4AB` were `dlyb_1`, and the tile did not route.
+- **100 fF on a tile's outputs** (`OUTPUT_CAP_LOAD`). A port drives its wire in
+  the neighbour and up to ten of the neighbour's multiplexers. At the PDK's
+  72.91 fF a `buf_1` stays at a port, at 0.28 pF against a limit of 0.25. At
+  100 fF 253 of the 254 outputs of `LUT4AB` have a `buf_4`; `repair_design`
+  adds it and resizes nothing.
+- **3,600 s for detailed routing** (`FABULOUS_DRT_TIMEOUT`). FABulous's 900 s
+  killed `LUT4AB` one violation from clean.
+
+The dies do not change, so the fabric stays at 2.18 mm², and the repair spends
+the room in them. `LUT4AB` holds 614 repair buffers of 14,264 µm² and goes from
+77 % to 93 % utilisation; it routes clean in 25 minutes, with little left for a
+tile with more logic. The others stay at 10 % to 50 %. Two runs from nothing
+gave byte-identical tile netlists and the same timing.
+
+```bash
+flow/librelane/scripts/efpga_sta.sh build/efpga_harden/small_fabric
+```
+
+`efpga_sta.sh` analyses a stitched run with OpenSTA (`nix develop .#physical`)
+at the nine corners: nom, min and max wires, at tt 25 °C 5.0 V, ss 125 °C
+4.5 V and ff −40 °C 5.5 V. It reads the macro's netlist and the tiles'
+netlists and parasitics. OpenSTA drops a tile's parasitics of a net that
+reaches the tile's ports, so each net between tiles gets the wire capacitance
+of its two parts as a lumped load: exact for the capacitance check,
+pessimistic for delay. It checks only what holds for every configuration:
+
+- max slew, capacitance and fanout, against the library's limits;
+- the skew of `UserCLK`, reported but not judged;
+- the configuration write: the latest strobe at any of the 6,696 latches, plus
+  the latch's hold time, must be under the loader's period (default 50 ns, the
+  20 MHz of the [synthesis](#synthesis)). The loader holds `FrameData` from the
+  cycle before a strobe rises until the cycle after it falls.
+
+A design's own paths depend on its configuration. To break the switch
+matrices' loops, OpenSTA disables 18,627 timing arcs, so it does not see
+those paths; they need the configuration of a design applied.
+
+Measured on 2026-10-29 on the tiles as FABulous makes them: **STA FAIL**. On
+2026-10-31 on the repaired tiles, in about 5 minutes: **STA PASS**, with no
+violation at any of the nine corners. The table gives both.
+
+| Corner | Slew violations (pins) | Capacitance violations (drivers) | `UserCLK` skew (ns) | Latest strobe (ns) |
+|---|---|---|---|---|
+| ss 125 °C, max wires | 17,463 → 0 | 589 → 0 | 13.0 → 17.0 | 27.7 → 24.6 |
+| tt 25 °C, nom wires | 16,605 → 0 | 519 → 0 | 7.3 → 9.2 | 14.8 → 13.0 |
+| ff −40 °C, max wires | 17,855 → 0 | 584 → 0 | 4.9 → 6.6 | 10.9 → 9.4 |
+
+- **Weak drivers, before the repair.** Of the 589 capacitance violators at ss,
+  481 were `buf_1`: synthesis buffers at tile ports, each driving a
+  neighbour's loads and its wire. The rest were LUT and switch-matrix outputs,
+  for example an `oai21_1` that drove 41 multiplexer inputs.
+- **A daisy-chained clock, which the repair does not touch.** `UserCLK` and the
+  strobes enter at the bottom terminal tiles and pass up each column through
+  one `buf_1` per tile, and `repair_design` skips clock nets. The clock arrives
+  up to 17.0 ns apart across the fabric at ss, more than before the repair, and
+  what that does to a design's hold depends on its paths.
+- **The configuration write passes.** At ss the latest strobe arrives at
+  24.6 ns, plus a 1.1 ns hold: under 50 ns. A loader clock above about 38 MHz
+  would not be safe.
 
 The SoC with the macro needs the user's approval.
 
@@ -1130,10 +1214,12 @@ which would enable a PDK through ciel; and Magic DRC unconditional.
   routing switch the same delay. None of them comes from a cell library or a
   layout, so the delays and the maximum frequency in `nextpnr.log` are not a
   timing result. `sdf-timing` is the PyPI release, not the commit FABulous
-  pins; only FABulous's timing-model flow parses SDF with it. The hardened
-  tiles and fabric macro have no timing analysis either: FABulous's flows
-  run no static timing step, and their timing checkers pass on no metric
-  ([Hardening](#hardening-for-gf180mcu)).
+  pins; only FABulous's timing-model flow parses SDF with it. FABulous's own
+  flows analyse no timing of the hardened tiles and macro. `efpga_sta.sh`
+  finds the repaired macro of `small` within the library's limits at every
+  corner, but it cannot time a design's own paths without that design's
+  configuration, so neither their setup and hold nor the effect of up to 17 ns
+  of `UserCLK` skew is known ([Hardening](#hardening-for-gf180mcu)).
 - **A tool combination FABulous does not test.** FABulous 2.2.0's own
   environment pins other Yosys and nextpnr revisions. The evidence that 2.2.0
   works with Yosys 0.62 and nextpnr 0.9 is the sweep steps that run them.

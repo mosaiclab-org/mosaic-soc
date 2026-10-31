@@ -474,13 +474,22 @@ def test_the_tile_flow_gets_the_pdk_itself_and_turns_no_check_off():
     """FABulous's settings enable a PDK through ciel (a download) whenever
     FAB_PDK names a family ciel knows: the driver keeps that check out of the
     context and hands the clone to the flow. No check is turned off: the loop
-    check stays on for tiles, which hold no loop (docs/efpga.md)."""
+    check stays on for tiles, which hold no loop (docs/efpga.md). What the flow
+    is told adds repair steps: the one step it takes out, it puts back later."""
     driver = efpga_gen.HARDEN
     compile(driver, "harden", "exec")  # it runs under another interpreter: check it parses
     assert "FABulousSettings.model_construct(" in driver  # no validation: no ciel
     assert "init_context" not in driver and "FAB_PDK" not in driver and "ciel." not in driver
-    assert "custom_config_overrides" not in driver and "ERROR_ON" not in driver
+    assert 'custom_config_overrides=job["config"]' in driver and "ERROR_ON" not in driver
     assert "ConditionalMagicDRC.run = DRC.run" in driver  # Magic DRC always runs
+    config = efpga_gen.TILE_CONFIG
+    assert set(config) == {"FABULOUS_LOOP_SUBSTITUTE_STEPS", "EXTRA_EXCLUDED_CELLS",
+                           "OUTPUT_CAP_LOAD", "FABULOUS_DRT_TIMEOUT"}
+    steps = config["FABULOUS_LOOP_SUBSTITUTE_STEPS"]
+    assert [step for step, by in steps.items() if by is None] == ["FABulous.DiodesOnPorts"]
+    assert all(step.startswith("+") for step, by in steps.items() if by is not None)
+    assert list(steps.values())[1:] == ["OpenROAD.RepairDesignPostGPL", "FABulous.DiodesOnPorts",
+                                        "OpenROAD.RepairDesignPostGRT"]
     assert efpga_gen.TILE_GATE == ("magic__drc_error__count", "klayout__drc_error__count",
                                    "design__lvs_error__count", "antenna__violating__nets")
 

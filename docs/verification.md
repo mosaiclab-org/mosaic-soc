@@ -33,7 +33,7 @@ line a runner prints on failure, so there the exit status decides.
 | `tb/floonoc/` | the OBI and AXI bridges, then the generated network on chip | cocotb + Verilator | `tb/floonoc/cocotb/run.sh`, `tb/floonoc/cocotb/run.sh stage2` |
 | `tb/tl_obi/` | the TileLink to OBI bridge used by Rocket and BOOM | Verilator | `tb/tl_obi/run.sh` |
 | `tb/sci/<core>/` | one SCI wrapper with its core: dormancy, wake, execution | Verilator | `tb/sci/<core>/run.sh` (serv, fazyrv, picorv32, hazard3) |
-| `tb/efpga/` | a generated eFPGA fabric alone, configured with a real bitstream; then the wrapper that makes it a bus peripheral and a worker of the TDU, with the bench as bus master and as the TDU ([efpga.md](efpga.md)); with `EFPGA_NETLIST`, both on the hardened fabric macro, in Verilator only and not in the sweep ([efpga.md](efpga.md#hardening-for-gf180mcu)) | Icarus Verilog and Verilator | `tb/efpga/run.sh`, `tb/efpga/run_wrapper.sh` |
+| `tb/efpga/` | a generated eFPGA fabric alone, configured with a real bitstream; then the wrapper that makes it a bus peripheral and a worker of the TDU, with the bench as bus master and as the TDU ([efpga.md](efpga.md)); with `EFPGA_NETLIST`, both on the hardened fabric macro, in Verilator only (`efpga_netlist`, [efpga.md](efpga.md#hardening-for-gf180mcu)) | Icarus Verilog and Verilator | `tb/efpga/run.sh`, `tb/efpga/run_wrapper.sh` |
 | `tb/mosaic/` | the generated `cpu_subsystem` with three serial cores and per-hart memories | Verilator; cocotb for the wake loop | `tb/mosaic/run.sh`, `tb/mosaic/cocotb/run.sh` |
 | `tb/mosaic_soc/` | the complete generated SoC | Verilator | see below |
 | `tb/gls/` | the placed-and-routed netlist | Icarus Verilog | `tb/gls/run_gls.sh` |
@@ -74,22 +74,24 @@ Python suite and gate-level simulation.
 `tb-matrix` validation tier, the subsystem benches, the wrapper benches, the
 ten eFPGA steps, the wake demonstration on each fabric and for each wrapped
 core, the multiprocessor demonstration on each fabric, the firmware run, and
-the Block A checks including gate-level simulation. It has 43 steps. Each step
-has a success marker that must appear in its log, and the script exits
-non-zero if any step fails.
+the Block A checks including gate-level simulation. It has 44 steps. One of
+them, `efpga_netlist`, runs only when named: it hardens the fabric of `small`,
+times it at nine corners and simulates its netlist, 3.7 hours. Each step has a success marker that must
+appear in its log, and the script exits non-zero if any step fails.
 
 ```bash
-scripts/run_sweep.sh --list          # print the step names
-scripts/run_sweep.sh --only wake     # steps whose name matches
-scripts/run_sweep.sh                 # everything; logs under build/sweep/
+scripts/run_sweep.sh --list                 # print the step names
+scripts/run_sweep.sh --only wake            # steps whose name matches
+scripts/run_sweep.sh --only efpga_netlist   # a step run only when named, in full
+scripts/run_sweep.sh                        # everything else; logs under build/sweep/
 ```
 
-The gate-level step and `efpga_synth` need the GF180MCU PDK clone on disk
-(`make -C flow/librelane clone-pdk`), the gate-level step also a hardened run;
-see below. The `efpga_*` steps enter `nix develop .#efpga` by themselves, and
+The gate-level step, `efpga_synth` and `efpga_netlist` need the GF180MCU PDK
+clone on disk (`make -C flow/librelane clone-pdk`), the gate-level step also a
+hardened run; see below. The `efpga_*` steps enter `nix develop .#efpga` by themselves, and
 the first entry downloads its Python environment from PyPI
 ([reproducing.md](reproducing.md#the-efpga-shell)); `efpga_synth` also enters
-`nix develop .#physical`.
+`nix develop .#physical`, and `efpga_netlist` both `.#fabric` and `.#physical`.
 
 ## tb-matrix: coverage of the design space
 
@@ -169,7 +171,7 @@ The suite covers configuration validation, template rendering, the software
 layout, the harness gates, the physical models, the evidence parsers, and the
 eFPGA generator's tool pins, PDK isolation and frame order (with fake tools:
 no test runs FABulous). The
-measured result on this tree is **1873 passed and 94 skipped**. Most skipped
+measured result on this tree is **1875 passed and 94 skipped**. Most skipped
 tests need hardening run trees or a PDK clone that are not in version control.
 One is skipped when no `riscv64-unknown-elf-gcc` is on the host, and
 `test_socview.py` adds one test per bundle under `build/mosaic/` whose

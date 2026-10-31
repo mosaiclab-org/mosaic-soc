@@ -66,9 +66,12 @@ and the TDU parks it when it does not. What follows does not exist.
   shell, `efpga_gen.py --harden` and `--stitch` exist; on 2026-10-29 the
   seven tile types of `small` hardened clean with the loop check on, the
   stitched fabric macro clean in DRC, LVS and antenna, and the benches of the
-  fabric and of the wrapper passed on its netlist, not in the sweep). Left:
-  the fabric's timing, which FABulous's flows do not analyse, then the SoC
-  with the macro. A signoff-clean design that contains a fabric.
+  fabric and of the wrapper passed on its netlist; opt-in sweep step
+  `efpga_netlist`). With `repair_design` added to the tile flow, the macro
+  meets the library's limits at nine corners (2026-10-31). Left: the timing of
+  a design's own paths with its configuration applied, which decides whether
+  the 17 ns of `UserCLK` skew needs a clock tree, then the SoC with the macro.
+  A signoff-clean design that contains a fabric.
 
 Open: which presets are offered, and the technology, GF180MCU or another.
 

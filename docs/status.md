@@ -80,7 +80,7 @@ For sky130, none of the eight is satisfied.
 | Physical flow | No step is skipped and a missing metric is not read as clean. | `flow/librelane/experimental/run_signoff.sh`; `harness/evidence/` and its tests |
 | Reproducibility | The simulation and physical toolchains are pinned to the same nix-eda and nixpkgs revisions. | `flake.nix`; `test_toolchain_pin.py`; `./mosaic doctor` |
 | Agent tooling | Tools reach the flows only through typed, gated calls. | `harness/gates.py`; `test_mcp_plugin_mode.py`, `test_agent_runtime.py` |
-| Python suite | 1873 passed, 94 skipped. | `make test` |
+| Python suite | 1875 passed, 94 skipped. | `make test` |
 
 The sweep steps are defined in the repository; their results depend on running
 them with the pinned toolchain ([verification.md](verification.md)).
@@ -168,9 +168,13 @@ eFPGA ([efpga.md](efpga.md)):
   wrapper and the fabric of `small` are synthesised for GF180MCU, with no
   negative slack at 20 MHz before layout, and the fabric alone is hardened as
   a macro clean in DRC, LVS and antenna, whose netlist passes the benches of
-  the fabric and of the wrapper in Verilator (not in the sweep). Its timing is
-  not analysed: FABulous's flows have no timing step. The command from a user's Verilog to a
-  simulation shows that the design works only as far as the user's own
+  the fabric and of the wrapper in Verilator (sweep step `efpga_netlist`, run
+  only when named). FABulous's flows check no timing and size no driver;
+  with `repair_design` added to the tile flow, `efpga_sta.sh` finds no slew,
+  capacitance or fan-out violation at any of the nine corners. `LUT4AB` is at
+  93 % utilisation, and the daisy-chained `UserCLK` has up to 17.0 ns of skew.
+  A design's own paths are not timed, so what the skew does is not known. The command
+  from a user's Verilog to a simulation shows that the design works only as far as the user's own
   check (`EFPGA_TEST`) tests it.
 - **`clear` is unsafe on a design that has run.** It zeroes every latch at
   once, and with one of the two test designs both simulators stop. The
