@@ -412,7 +412,7 @@ def test_the_task_ports_are_where_the_wrapper_drives_them():
     wrapper = (REPO_ROOT / "hw/efpga/mosaic_efpga.sv").read_text()
     assert "{task_q[31:16], t_valid_q, u_addr_q, u_be_q, ~user_rst_q, u_we_q," in wrapper
     assert "assign result_x[8*g+:8] = FAB2RAM_D_O[16*g+8+:8];" in wrapper
-    assert "done_q <= fab_en & FAB2RAM_C_O[1];" in wrapper
+    assert "done_q <= fab_en & (fab_tick ? FAB2RAM_C_O[1] : done_q);" in wrapper
     # Without task_done the shell holds it low: no task ends.
     held = efpga_gen.shell_wrapper("leds", {"clk": ("input", 1)}, SMALL)
     assert held.count(".I1(1'b0)") == 1

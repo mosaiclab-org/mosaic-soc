@@ -24,17 +24,26 @@
 #     strobe rises until the cycle after it falls (hw/efpga/mosaic_efpga.sv),
 #     so a write is safe while the latest strobe plus the latch's hold time is
 #     under EFPGA_STA_PERIOD ns (default 50, the 20 MHz of the synthesis)
-# A design's own paths depend on its configuration: the switch matrices' loops
-# leave OpenSTA blind to them.
 #
-# Pass: "STA PASS run=<run> ...", printed last. Usage:
-#   flow/librelane/scripts/efpga_sta.sh build/efpga_harden/small_fabric
+# A design's own paths depend on its configuration: the switch matrices' loops
+# leave OpenSTA blind to them. Each design named after the run is timed with its
+# configuration applied (util/mosaic_gen/efpga_timing.py): setup and hold of the
+# flops it uses and of the wrapper's window it routes, at the same nine corners,
+# with the wrapper's clock period EFPGA_STA_PERIOD and the fabric's clock pulsing
+# one cycle in EFPGA_STA_DIV (default 4, the reset value of hw/efpga/mosaic_efpga.sv).
+# The pads are not timed, since what drives them is outside the chip.
+#
+# Pass: "STA PASS run=<run> ...", then one "STA DESIGN PASS design=<design> ..."
+# per design: any violation, a used flop no path reaches, or a loop OpenSTA cut
+# on a used path fails it. Usage:
+#   flow/librelane/scripts/efpga_sta.sh build/efpga_harden/small_fabric [design ...]
 # GF180_PDK_ROOT: as for efpga_synth.sh. Logs: build/efpga_sta/<run>/.
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$REPO"
 RUN="$(cd "${1:?usage: efpga_sta.sh <the --out of efpga_gen.py --stitch>}" && pwd)"
 PERIOD="${EFPGA_STA_PERIOD:-50}"
+DIV="${EFPGA_STA_DIV:-4}"
 PDK="${GF180_PDK_ROOT:-$REPO/flow/librelane/gf180mcu}"
 LIB="$PDK/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__"
 OUT="$REPO/build/efpga_sta/$(basename "$RUN")"
@@ -64,7 +73,7 @@ for tile, views in sorted(manifest["tile_macros"].items()):
 out.write_text("\n".join(lines) + "\n")
 EOF
 
-cat > "$OUT/sta.tcl" <<EOF
+cat > "$OUT/load.tcl" <<EOF
 read_liberty ${LIB}\$::env(LIBC).lib
 source $OUT/tiles.tcl
 foreach tile [array names nl] { read_verilog \$nl(\$tile) }
@@ -78,6 +87,10 @@ foreach net [get_nets *] {
   }
   if {\$c > 0} { set_load \$c \$net }
 }
+EOF
+
+cat > "$OUT/sta.tcl" <<EOF
+source $OUT/load.tcl
 create_clock -name UserCLK -period 20 [get_ports UserCLK]
 set_propagated_clock [get_clocks UserCLK]
 puts "### DRV"
@@ -148,3 +161,64 @@ print(f"STA {'FAIL' if errors else 'PASS'} run={run} corners=9 latches={latches}
       f"fanout={worst(3)} userclk_skew_ns={worst(4):.2f} framestrobe_ns={worst(6):.2f} period_ns={period:g}")
 sys.exit(1 if errors else 0)
 EOF
+
+[ $# -gt 1 ] || exit 0
+shift
+# The wrapper is not laid out yet, so its side of the window is an estimate from
+# the fabric's own dffq_1 and an and2, with its flops on the clock at UserCLK:
+# launch at most these ns after the edge, and capture this long before it. A
+# launch at the edge bounds hold from below, which also covers the clock gate.
+# With a divided clock the wrapper's edge is one period after the fabric's pulse.
+cat > "$OUT/design.tcl" <<EOF
+source $OUT/load.tcl
+source \$::env(DESIGN_TCL)
+create_clock -name UserCLK -period [expr {$DIV * $PERIOD}] [get_ports UserCLK]
+set_propagated_clock [get_clocks UserCLK]
+set offset [expr {$DIV > 1 ? $PERIOD : 0}]
+set launch [dict get {tt_025C_5v00 1.2 ss_125C_4v50 2.0 ff_n40C_5v50 0.8} \$::env(LIBC)]
+set capture [dict get {tt_025C_5v00 0.5 ss_125C_4v50 1.0 ff_n40C_5v50 0.3} \$::env(LIBC)]
+set flops [all_registers -edge_triggered -clock_pins]
+set dat {}
+foreach f \$used { lappend dat [get_pins \$f/D] }
+set in {}
+foreach p \$bound_in { lappend in [get_ports \$p] }
+set out {}
+foreach p \$bound_out { lappend out [get_ports \$p] }
+proc group {name args} {
+  foreach d {max min} {
+    puts "### \$name \$d"
+    report_checks -path_delay \$d -format end -group_path_count 5000 -unique_paths_to_endpoint -digits 3 {*}\$args
+  }
+}
+group reg2reg -from \$flops -to \$dat
+if {[llength \$in]} {
+  set_input_delay -clock UserCLK -max [expr {\$offset + \$launch}] \$in
+  set_input_delay -clock UserCLK -min \$offset \$in
+  group in2reg -from \$in -to \$dat
+}
+if {[llength \$out]} {
+  set_output_delay -clock UserCLK -max \$capture \$out
+  set_output_delay -clock UserCLK -min 0 \$out
+  group reg2out -from \$flops -to \$out
+}
+if {[llength \$in] && [llength \$out]} { group in2out -from \$in -to \$out }
+puts "### CONE"
+foreach p [get_fanin -to [concat \$dat \$out] -flat -trace_arcs enabled] { puts [get_full_name \$p] }
+puts "### LOOPS"
+check_setup -verbose -loops
+EOF
+
+for design in "$@"; do
+  mkdir -p "$OUT/$design"
+  python3 util/mosaic_gen/efpga_timing.py tcl "$RUN" "$design" "${LIB}tt_025C_5v00.lib" "$OUT/$design/design.tcl" \
+    > "$OUT/$design/summary.txt" || fail "$design: efpga_timing.py"
+done
+echo "### the designs ..."
+nix develop "$REPO#physical" --option warn-dirty false --command bash -c "
+  set -e
+  for design in $*; do for lib in tt_025C_5v00 ss_125C_4v50 ff_n40C_5v50; do for rc in nom min max; do
+    DESIGN_TCL=$OUT/\$design/design.tcl LIBC=\$lib RC=\$rc sta -no_init -exit $OUT/design.tcl \
+      > $OUT/\$design/\${rc}_\$lib.log 2>&1
+  done; done; done
+" > "$OUT/tools_designs.log" 2>&1 || fail "OpenSTA on a design, see $OUT/*/*.log"
+python3 util/mosaic_gen/efpga_timing.py verdict "$OUT" "$PERIOD" "$DIV" "$@"

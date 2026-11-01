@@ -49,10 +49,16 @@ module tb_mosaic_efpga;
     localparam int MFPC = `MFPC;
     localparam int LOAD_TIMEOUT = 512;  // the module's default is 65536 cycles
     localparam int BUS_TIMEOUT = 256;  // the module's default
+`ifndef FABRIC_DIV
+`define FABRIC_DIV 1
+`endif
+    // One clock of the fabric in DIV cycles. At 1 the window moves on the
+    // fabric's edge and every latency below is exact; above it they are bounds.
+    localparam int DIV = `FABRIC_DIV;
     localparam logic [31:0] NO_ANSWER = 32'hFAB0_0BAD;
     localparam logic [31:0] R0_RESET = 32'h600D_F00D;
     localparam logic [3:0] BITSTREAM = 4'h0, STATUS = 4'h4, CONTROL = 4'h8, TAG = 4'hC;
-    localparam logic [4:0] TASK = 5'h10, RESULT = 5'h14;
+    localparam logic [4:0] TASK = 5'h10, RESULT = 5'h14, CLKDIV = 5'h18;
     // STATUS: {cause[10:8], cut, blocked, timeout, error, configured, busy}
     localparam logic [10:0] IDLE = 11'h000, CONFIGURED = 11'h002, TIMEOUT = 11'h008,
                             BLOCKED = 11'h010, CUT = 11'h020;
@@ -81,13 +87,19 @@ module tb_mosaic_efpga;
     assign task_data = task_gnt && pops == head_pops ? head : '0;
     always @(posedge clk) if (task_gnt) pops <= pops + 1;
 
+`ifdef EFPGA_LATCHES
+    `include "efpga_latches.vh"
+    string latch_role;
+`endif
+
     mosaic_efpga #(
         .ROWS(ROWS),
         .COLS(COLS),
         .FBPR(FBPR),
         .MFPC(MFPC),
         .BUS_TIMEOUT(BUS_TIMEOUT),
-        .LOAD_TIMEOUT(LOAD_TIMEOUT)
+        .LOAD_TIMEOUT(LOAD_TIMEOUT),
+        .FABRIC_DIV(DIV)
     ) dut (
         .clk_i(clk),
         .rst_ni(rst_n),
@@ -107,10 +119,11 @@ module tb_mosaic_efpga;
     );
 
     // Reference for the pads: the RTL the `silent` bitstream was compiled from,
-    // on the free clock. The fabric's clock is that clock while it is enabled.
+    // on the free clock, or on the fabric's own when it is divided. At 1 the
+    // fabric's clock is the free clock while it is enabled.
     wire [7:0] gold_out, gold_oeb;
     counter8_en gold_i (
-        .clk   (clk),
+        .clk   (DIV == 1 ? clk : dut.CLK),
         .io_in (pad_in),
         .io_out(gold_out),
         .io_oeb(gold_oeb)
@@ -181,6 +194,17 @@ module tb_mosaic_efpga;
         frame_data_prev <= dut.FrameData;
         strobe_prev <= |dut.FrameSelect;
     end
+
+    // Above 1, what the fabric gets never moves on the edge of its own clock: the
+    // hold of its flops rests on it (docs/efpga.md, Timing of a design). A cut-off
+    // may: inputs fall with fab_en.
+    logic [16*ROWS-1:0] east_before = '0;
+    always @(negedge clk) east_before <= dut.RAM2FAB_D_I;
+    always @(posedge dut.CLK)
+        if (DIV > 1 && dut.fab_en) begin
+            #1;
+            if (dut.fab_en && dut.RAM2FAB_D_I !== east_before) fail("east_edge_moved_on_the_pulse");
+        end
 
     // What a design sees on the east edge (the table of docs/efpga.md): per
     // row, a byte of ctl above a byte of wdata, with ctl = {addr[9:2], be,
@@ -287,14 +311,19 @@ module tb_mosaic_efpga;
         #1 if (obi_rsp.gnt !== 1'b0) fail("granted_while_busy");
         obi_req = '0;
         for (latency = 1; obi_rsp.rvalid !== 1'b1; latency++) begin
-            if (latency > BUS_TIMEOUT + 8) fail("user_window_hang");
+            if (latency > BUS_TIMEOUT * DIV + 8) fail("user_window_hang");
             @(negedge clk);
         end
         rdata = obi_rsp.rdata;
-        // With the answer, the design's `valid` is low again.
-        if (dut.RAM2FAB_D_I[8] !== 1'b0) fail("valid_held_after_the_answer");
+        // With the answer, the design's `valid` is low again: at once, or at the
+        // edge after the next pulse of its clock.
+        if (DIV == 1 && dut.RAM2FAB_D_I[8] !== 1'b0) fail("valid_held_after_the_answer");
         @(negedge clk);
         if (obi_rsp.rvalid !== 1'b0) fail("rvalid_longer_than_a_cycle");
+        if (DIV > 1) begin
+            repeat (DIV) @(negedge clk);
+            if (dut.RAM2FAB_D_I[8] !== 1'b0) fail("valid_held_after_the_answer");
+        end
     endtask
 
     task automatic user_read(input logic [9:0] addr, input logic [31:0] want,
@@ -306,6 +335,14 @@ module tb_mosaic_efpga;
         end
     endtask
 
+    // The fabric's clock pulses once in `cycles`.
+    task automatic clock_rate(input int cycles, input string reason);
+        int start;
+        start = fabric_edges;
+        repeat (64 * cycles) @(negedge clk);
+        if (fabric_edges - start != 64) fail(reason);
+    endtask
+
     // A request the hard part must answer itself: at once when isolated, after
     // exactly BUS_TIMEOUT cycles when the design is silent. STATUS must then
     // say which, in a flag that only a 1 in its own bit clears.
@@ -313,7 +350,10 @@ module tb_mosaic_efpga;
                                     input string reason);
         user_access(we, 10'h0, 32'h5A5A_5A5A);
         if (rdata !== NO_ANSWER) fail(reason);
-        if (latency != (want[4] ? 1 : BUS_TIMEOUT + 1)) fail(reason);
+        if (want[4] ? latency != 1
+                    : DIV == 1 ? latency != BUS_TIMEOUT + 1
+                               : latency > BUS_TIMEOUT * DIV + DIV || latency < (BUS_TIMEOUT - 2) * DIV)
+            fail(reason);
         expect_status(want, reason);
         reg_write(STATUS, want[4] ? 32'hFFFF_FFEF : 32'hFFFF_FFF7);
         expect_status(want, "wrong_flag_cleared");
@@ -509,6 +549,7 @@ module tb_mosaic_efpga;
     // wake pulse a push with the slot's core_hint makes. The slot is awake
     // from the edge that takes the pulse.
     task automatic give(input logic [31:0] desc);
+        repeat (DIV > 1 ? DIV : 0) @(negedge clk);  // the last task has left the edge
         head = desc;
         head_pops = pops;
         if (desc != '0) task_want = desc[31:16];
@@ -545,7 +586,8 @@ module tb_mosaic_efpga;
         int seen;
         seen = task_seen;
         give({id, 16'h1800});
-        wait_sleep(20, reason);
+        wait_sleep(20 * DIV, reason);
+        repeat (DIV > 1 ? DIV : 0) @(negedge clk);
         if (dut.RAM2FAB_D_I[16*1+8+7] !== 1'b0) fail("task_valid_held_after_the_end");
         if (task_seen == seen) fail("task_not_on_the_edge");
         if (pops != head_pops + 1) fail("head_not_taken");
@@ -572,6 +614,7 @@ module tb_mosaic_efpga;
         void'($value$plusargs("fault=%s", fault));
         east_on = fault != "wdata_pin" && fault != "addr_pin";
         if (fault == "fab_en_stuck") force dut.fab_en = 1'b1;
+        if (fault == "east_on_the_pulse") force dut.div_q = '0;
         if (fault == "clock_leak") force dut.CLK = clk;
         if (fault == "no_clear_pulse") force dut.CLK = 1'b0;
         if (fault == "no_flush") force dut.flush = 1'b0;
@@ -598,6 +641,17 @@ module tb_mosaic_efpga;
         expect_tag('0, "tag_without_a_design");
         reg_access(1'b0, CONTROL, '0, rdata);
         if (rdata !== 32'h3) fail("control_after_reset");
+
+`ifdef EFPGA_LATCHES
+        // +latches=<role>: what the timing of that design assumes each latch
+        // holds, read back after the loader (util/mosaic_gen/efpga_timing.py).
+        if ($value$plusargs("latches=%s", latch_role)) begin
+            load(latch_role);
+            expect_status(CONFIGURED, "latches_not_configured");
+            $display("LATCHES %b", latches);
+            $finish;
+        end
+`endif
 
         $display("[%0t] step 2", $time);
         // 2. Nothing is configured: the fabric is cut off whatever CONTROL says,
@@ -682,26 +736,27 @@ module tb_mosaic_efpga;
         // never reaches the design.
         done_probe = 1'b1;
         give(32'h0666_1800);
-        repeat (10) @(negedge clk);
+        repeat (10 * DIV) @(negedge clk);
         if (task_sleep !== 1'b0 || task_seen != mark) fail("task_given_over_a_high_done");
         pulse_park;
         expect_cut(32'h0666_1800, CONFIGURED, "park_ignored_while_waiting");
         if (task_seen != mark) fail("task_given_over_a_high_done");
         // Again, and the done falls: the task runs.
         give(32'h0777_1800);
-        repeat (10) @(negedge clk);
+        repeat (10 * DIV) @(negedge clk);
         if (task_sleep !== 1'b0 || task_seen != mark) fail("task_given_over_a_high_done");
         done_probe = 1'b0;
-        wait_sleep(20, "task_after_a_high_done");
+        wait_sleep(20 * DIV, "task_after_a_high_done");
         expect_reg(RESULT, {16'd4, 16'h0777 ^ 16'hA5A5}, "task_after_a_high_done");
         expect_status(CONFIGURED, "task_after_a_high_done");
         // A task the design never ends runs until the TDU parks the slot.
         mark = task_seen;
         give(32'hFFFF_1800);
-        repeat (50) @(negedge clk);
+        repeat (50 * DIV) @(negedge clk);
         if (task_sleep !== 1'b0 || task_seen < mark + 40) fail("endless_task_not_running");
         pulse_park;
         expect_cut(32'hFFFF_1800, CONFIGURED, "park_ignored");
+        repeat (DIV > 1 ? DIV : 0) @(negedge clk);
         if (dut.RAM2FAB_D_I[16*1+8+7] !== 1'b0) fail("task_valid_held_after_the_park");
         // Cut off while it runs, and given while cut off: cut at once.
         give(32'hFFFF_1800);
@@ -728,10 +783,10 @@ module tb_mosaic_efpga;
         control = 2'b00;
         hold_grant = 1'b0;
         mark = task_seen;
-        repeat (10) @(negedge clk);
+        repeat (10 * DIV) @(negedge clk);
         if (task_sleep !== 1'b0 || task_seen != mark) fail("task_given_at_the_connection");
         done_pin_probe = 1'b0;
-        wait_sleep(20, "task_after_the_connection");
+        wait_sleep(20 * DIV, "task_after_the_connection");
         expect_reg(RESULT, {16'd5, 16'h0ABC ^ 16'hA5A5}, "task_after_the_connection");
         expect_status(CONFIGURED, "task_after_the_connection");
         run_task(16'h0099, {16'd6, 16'h0099 ^ 16'hA5A5}, "task_after_reconnect");
@@ -758,8 +813,10 @@ module tb_mosaic_efpga;
         // is its reset, io_in[1] its enable), and the hard part passes it on.
         if (fault == "pad_stuck") force dut.I_top[2] = 1'b0;
         pad_in = 8'd3;
-        repeat (3) @(negedge clk);
-        for (int k = 1; k <= COUNT_CYCLES; k++) begin
+        repeat (3 * DIV) @(negedge clk);
+        for (int c = DIV; c < (COUNT_CYCLES + 1) * DIV; c++) begin
+            int k;
+            k = c / DIV;  // a clock of the fabric
             pad_in[7:2] = k[5:0];  // the counter reads only the two pads below
             pad_in[1] = !(k >= 100 && k < 110);
             pad_in[0] = (k == 200);
@@ -771,7 +828,21 @@ module tb_mosaic_efpga;
                 fail("pad_mismatch");
             end
         end
-        if (pad_out !== 8'd100) fail("pad_final_count");
+        if (pad_out !== (DIV == 1 ? 8'd100 : gold_out)) fail("pad_final_count");
+        // CLKDIV is what the clock does: it comes out of reset as the module's
+        // parameter, takes a write only while cut off, and then sets the rate.
+        expect_reg(CLKDIV, DIV - 1, "clkdiv_out_of_reset");
+        clock_rate(DIV, "fabric_clock_rate");
+        reg_write(CLKDIV, 32'd7);
+        expect_reg(CLKDIV, DIV - 1, "clkdiv_written_while_connected");
+        set_control(2'b01);
+        reg_write(CLKDIV, 32'd1);
+        expect_reg(CLKDIV, 1, "clkdiv_not_written");
+        set_control(2'b00);
+        clock_rate(2, "clkdiv_not_applied");
+        set_control(2'b01);
+        reg_write(CLKDIV, DIV - 1);
+        set_control(2'b00);
         // Connected, each pad passes on what the fabric drives, whatever that is.
         force dut.I_top = 8'hA5;
         force dut.T_top = 8'h3C;
@@ -796,7 +867,8 @@ module tb_mosaic_efpga;
         reg_write(STATUS, 32'h08);
         // Cut off in the last cycle of the timeout, the request ends by the
         // timeout; a cycle earlier, by the cut-off.
-        for (int early = 1; early <= 2; early++) begin
+        // (These two edges are exact only at 1.)
+        for (int early = 1; DIV == 1 && early <= 2; early++) begin
             fork
                 user_access(1'b0, 10'h0, '0);
                 begin
@@ -988,13 +1060,13 @@ module tb_mosaic_efpga;
         if (dut.RAM2FAB_D_I[8] !== 1'b0) fail("valid_without_a_request");
         if (fault == "wdata_pin") force dut.RAM2FAB_D_I[55] = 1'b0;  // wdata[31]
         set_control(2'b10);  // connected, the user reset held
-        repeat (4) @(negedge clk);
+        repeat (4 * DIV) @(negedge clk);
         set_control(2'b00);
         user_access(1'b0, 10'h0, '0);
         expect_status(CONFIGURED, "unexpected_timeout");
         if (rdata !== R0_RESET) fail("reset_value");
         user_read(10'h4, {R0_RESET[31:4], 4'h0}, "reset_value");
-        if (latency > 8) fail("answer_too_late");
+        if (latency > 8 * DIV + DIV) fail("answer_too_late");
         for (int b = 0; b <= 32; b++) begin  // every data line, each way
             user_access(1'b1, 10'h0, b == 32 ? '0 : 32'h1 << b);
             // The answer to a write carries what the design shows in the cycle
@@ -1018,17 +1090,23 @@ module tb_mosaic_efpga;
         user_read(10'h4, 32'hC001_D006, "address_decode");
         user_read(10'h0, 32'hC001_D00D, "address_decode");
         expect_status(CONFIGURED, "unexpected_timeout");
-        // An acknowledge in the cycle the fabric is cut off is the answer:
-        // the design acted on the request.
-        fork
+        // An acknowledge in the cycle the fabric is cut off is the answer: the
+        // design acted on the request. Above 1, an acknowledge between two
+        // pulses is not yet heard, and a cut-off then answers NoAnswer.
+        if (DIV == 1) begin
+            fork
+                user_access(1'b1, 10'h0, 32'h1234_5678);
+                begin
+                    while (dut.FAB2RAM_C_O[0] !== 1'b1) @(negedge clk);
+                    reg_write(CONTROL, 32'h1);
+                end
+            join
+            if (rdata !== 32'h1234_5678) fail("acknowledge_at_the_cut_off_lost");
+            expect_status(CONFIGURED, "acknowledge_at_the_cut_off_lost");
+        end else begin
             user_access(1'b1, 10'h0, 32'h1234_5678);
-            begin
-                while (dut.FAB2RAM_C_O[0] !== 1'b1) @(negedge clk);
-                reg_write(CONTROL, 32'h1);
-            end
-        join
-        if (rdata !== 32'h1234_5678) fail("acknowledge_at_the_cut_off_lost");
-        expect_status(CONFIGURED, "acknowledge_at_the_cut_off_lost");
+            set_control(2'b01);
+        end
         // An acknowledge left high while the fabric was cut off answers no
         // request granted as it is connected again.
         force dut.FAB2RAM_C_O[0] = 1'b1;
@@ -1062,7 +1140,12 @@ module tb_mosaic_efpga;
         reg_write(STATUS, 32'h10);
         set_control(2'b00);
         // One that falls in the last cycle of the timeout: too late, and the
-        // request is not passed on then either.
+        // request is not passed on then either. These edges are exact only at 1.
+        if (DIV > 1) begin
+            release dut.FAB2RAM_C_O[0];
+            repeat (2 * DIV) @(negedge clk);
+            user_read(10'h0, 32'hC001_D00D, "after_stuck_acknowledge");
+        end else begin
         fork
             expect_no_answer(1'b0, CONFIGURED | TIMEOUT, "late_acknowledge_fall");
             begin
@@ -1094,7 +1177,8 @@ module tb_mosaic_efpga;
         release dut.FAB2RAM_C_O[0];
         if (rdata !== 32'hC001_D00D || latency != BUS_TIMEOUT + 1) fail("last_cycle_acknowledge");
         expect_status(CONFIGURED, "last_cycle_acknowledge");
-        repeat (4) @(negedge clk);
+        end
+        repeat (4 * DIV) @(negedge clk);
 
         // A word written when a design is configured is dropped, unless it is
         // the sync word.
@@ -1103,7 +1187,7 @@ module tb_mosaic_efpga;
         // The user reset alone puts the registers back.
         if (fault == "no_user_reset") force dut.RAM2FAB_D_I[10] = 1'b1;  // rst_n
         set_control(2'b10);
-        repeat (4) @(negedge clk);
+        repeat (4 * DIV) @(negedge clk);
         set_control(2'b00);
         user_read(10'h0, R0_RESET, "user_reset");
         // Isolated, every line of the east edge is 0, whatever the last
@@ -1176,7 +1260,7 @@ module tb_mosaic_efpga;
         set_control(2'b00);
         expect_no_answer(1'b0, CONFIGURED | TIMEOUT, "silent_design_answered");
         pad_in = 8'd2;  // enabled, not reset: the count from 0
-        repeat (50) @(negedge clk);
+        repeat (50 * DIV) @(negedge clk);
         if (pad_out !== 8'd50) fail("replacement_not_running");
         // A request open when the unload's sync word cuts the design off is
         // answered at once, and the unload drops the `blocked` it sets and the
@@ -1201,7 +1285,7 @@ module tb_mosaic_efpga;
         set_control(2'b00);
         user_read(10'h0, '0, "reload_not_from_zero");
         set_control(2'b10);
-        repeat (4) @(negedge clk);
+        repeat (4 * DIV) @(negedge clk);
         set_control(2'b00);
         user_read(10'h0, R0_RESET, "reload_reset_value");
         user_access(1'b1, 10'h0, 32'h1234_5678);

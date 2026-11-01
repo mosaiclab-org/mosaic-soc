@@ -7,7 +7,7 @@
 // `eFPGA`, which is whatever the bitstream makes it. FABulous's eFPGA_top and
 // its configuration logic are not used. docs/efpga.md is the reference.
 //
-// Register port (six registers, never an error; a write that does not carry
+// Register port (seven registers, never an error; a write that does not carry
 // all four bytes is dropped):
 //   0x0 BITSTREAM  W   the next word of a stream: <design>.hex or
 //                      <design>.unload.hex of util/mosaic_gen/efpga_gen.py
@@ -22,6 +22,8 @@
 //   0xC TAG        R   [15:0] the tag of the design in the latches, 0: none
 //   0x10 TASK      R   the descriptor of the last task taken from the TDU
 //   0x14 RESULT    R   the design's task_result for it, NoAnswer if it was cut
+//   0x18 CLKDIV    RW  [3:0] the fabric's clock pulses every CLKDIV+1 cycles (reset
+//                      FABRIC_DIV-1); a write while connected is dropped
 //
 // A stream starts with the sync word. Each frame (a header, then a data word
 // per row) is followed by a check word, and the end word by the CRC: each is
@@ -58,6 +60,16 @@
 // `isolate` is clear. Otherwise its clock is stopped, but for the one pulse
 // of a clear or of an unload, every input is 0 (the user reset, active low,
 // among them) and every output is ignored.
+//
+// The fabric's clock. A fabric is slower than the SoC, and its clock arrives
+// late: UserCLK climbs each column through every tile, up to 18 ns at the slow
+// corner. So the clock pulses one cycle in N, and the window keeps away from
+// that edge E: what goes to the fabric changes at the edge after it, E + 1,
+// which is later than E reaches any flop, and what comes back is taken at the
+// next pulse, E + N, before the new E has reached any flop either. The fabric
+// has N cycles for its own paths. The window's handshakes need no more than
+// that; efpga_sta.sh checks it for each design (docs/efpga.md). A cut-off drops
+// the inputs at once, even on the very edge E: the design is being cut off.
 //
 // Worker slot. The fabric is the last slot of the TDU (EFPGA_TDU_SLOT): a
 // descriptor pushed with that core_hint wakes the slot, which then takes the
@@ -101,8 +113,9 @@ module mosaic_efpga #(
     parameter int unsigned COLS = 4,
     parameter int unsigned FBPR = 32,  // frame bits per row
     parameter int unsigned MFPC = 20,  // frames, that is strobe lines, per column
-    parameter int unsigned BUS_TIMEOUT = 256,  // cycles a user design has to answer
-    parameter int unsigned LOAD_TIMEOUT = 65536  // cycles between two bitstream words
+    parameter int unsigned BUS_TIMEOUT = 256,  // fabric clocks a user design has to answer
+    parameter int unsigned LOAD_TIMEOUT = 65536,  // cycles between two bitstream words
+    parameter int unsigned FABRIC_DIV = 4  // cycles per clock of the fabric, out of reset
 ) (
     input logic clk_i,
     input logic rst_ni,
@@ -139,7 +152,7 @@ module mosaic_efpga #(
   localparam int unsigned CntW = $clog2(BUS_TIMEOUT);
 
   if (ROWS < 4 || COLS > 32 || FBPR != 32 || MFPC > EndBit || BUS_TIMEOUT < 3 ||
-      LOAD_TIMEOUT < 2) begin : gen_unsupported
+      LOAD_TIMEOUT < 2 || FABRIC_DIV < 1 || FABRIC_DIV > 16) begin : gen_unsupported
     $fatal(1, "mosaic_efpga: this geometry or timeout is not supported");
   end
 
@@ -223,7 +236,7 @@ module mosaic_efpga #(
   logic [31:0] task_q, result_q;
 
   logic reg_wr, bs_ready, bs_word, sync, clear, flush, tag_ok, frame_ok;
-  logic [ 2:0] reg_idx;  // 0 BITSTREAM, 1 STATUS, 2 CONTROL, 3 TAG, 4 TASK, 5 RESULT
+  logic [ 2:0] reg_idx;  // 0 BITSTREAM, 1 STATUS, 2 CONTROL, 3 TAG, 4 TASK, 5 RESULT, 6 CLKDIV
   logic [31:0] wdata;
   assign wdata   = reg_req_i.wdata;
   assign reg_idx = reg_req_i.addr[4:2];
@@ -232,6 +245,10 @@ module mosaic_efpga #(
   // `loading`: it waits for the next word of a stream, or for the sync word
   // after a word that was not one.
   logic stepping, loading, busy, fab_en;
+  // fab_tick: the edge that ends this cycle is a pulse of the fabric's clock, if connected.
+  logic [3:0] div_q, phase_q;
+  logic fab_tick, east_fresh_q;
+  assign fab_tick = phase_q >= div_q;
   assign stepping = load_q == L_CLR0 || load_q == L_CLR1 || load_q == L_CLR2 ||
       load_q == L_CLR3 || load_q == L_STROBE || load_q == L_HOLD || load_q == L_FLUSH;
   assign loading = load_q == L_SYNC || load_q == L_TAG || load_q == L_HDR ||
@@ -274,6 +291,7 @@ module mosaic_efpga #(
       3'd3: reg_rsp_o.rdata = {16'b0, tag};
       3'd4: reg_rsp_o.rdata = task_q;
       3'd5: reg_rsp_o.rdata = result_q;
+      3'd6: reg_rsp_o.rdata = {28'b0, div_q};
       default: ;
     endcase
   end
@@ -302,8 +320,12 @@ module mosaic_efpga #(
       row_q <= '0;
       crc_q <= '1;
       wdog_q <= '0;
+      div_q <= 4'(FABRIC_DIV - 1);
+      phase_q <= '0;
     end else begin
       out_of_reset_q <= 1'b1;
+      phase_q <= fab_tick ? '0 : phase_q + 1'b1;
+      if (reg_wr && reg_idx == 3'd6 && !fab_en) div_q <= wdata[3:0];
       if (reg_wr && reg_idx == 3'd1) begin  // write 1 to clear
         if (wdata[3]) timeout_q <= 1'b0;
         if (wdata[4]) blocked_q <= 1'b0;
@@ -518,10 +540,12 @@ module mosaic_efpga #(
       resp_q <= '0;
       u_cnt_q <= '0;
     end else begin
-      ack_q <= fab_en & FAB2RAM_C_O[0];
-      fab_en_q <= fab_en;
-      rdata_q <= rdata_x[31:0];
-      u_cnt_q <= u_cnt_q + 1'b1;
+      ack_q <= fab_en & (fab_tick ? FAB2RAM_C_O[0] : ack_q);
+      fab_en_q <= fab_en & (fab_tick | fab_en_q);
+      if (fab_tick) begin
+        rdata_q <= rdata_x[31:0];
+        u_cnt_q <= u_cnt_q + 1'b1;
+      end
       unique case (user_q)
         U_IDLE:
         if (obi_req_i.req) begin
@@ -542,7 +566,7 @@ module mosaic_efpga #(
         // request does not outlive the connection it was granted on.
         U_LOW:
         if (u_expired || !fab_en) user_q <= U_RESP;
-        else if (!ack_q) begin
+        else if (!ack_q && fab_en_q) begin
           u_valid_q <= 1'b1;
           user_q <= U_REQ;
         end
@@ -593,8 +617,8 @@ module mosaic_efpga #(
       task_q <= '0;
       result_q <= '0;
     end else begin
-      done_q <= fab_en & FAB2RAM_C_O[1];
-      t_result_q <= result_x[31:0];
+      done_q <= fab_en & (fab_tick ? FAB2RAM_C_O[1] : done_q);
+      if (fab_tick) t_result_q <= result_x[31:0];
       unique case (t_state_q)
         T_SLEEP: if (task_wake_i) t_state_q <= T_POP;
         // As with the bus, a task taken in the first cycle after the fabric
@@ -615,7 +639,7 @@ module mosaic_efpga #(
         end else if (task_park_i) t_state_q <= T_SLEEP;
         T_LOW:
         if (set_cut) t_state_q <= T_SLEEP;
-        else if (!done_q) begin
+        else if (!done_q && fab_en_q) begin
           t_valid_q <= 1'b1;
           t_state_q <= T_RUN;
         end
@@ -632,7 +656,7 @@ module mosaic_efpga #(
   // ------------------------------------------------------------------ isolation
   tc_clk_gating fabric_clk_gate_i (
       .clk_i,
-      .en_i(fab_en || load_q == L_CLR3 || flush),
+      .en_i((fab_en && fab_tick && (east_fresh_q || div_q == '0)) || load_q == L_CLR3 || flush),
       .test_en_i(1'b0),
       .clk_o(CLK)
   );
@@ -640,11 +664,26 @@ module mosaic_efpga #(
   assign wdata_x = (8 * ROWS)'(u_wdata_q);
   assign ctl_x   = (8 * ROWS)'({task_q[31:16], t_valid_q, u_addr_q, u_be_q, ~user_rst_q, u_we_q,
                                  u_valid_q});
+  logic [16*ROWS-1:0] east_d, east_q;
   for (genvar g = 0; g < ROWS; g++) begin : gen_east_edge
-    assign RAM2FAB_D_I[16*g+:16] = fab_en ? {ctl_x[8*g+:8], wdata_x[8*g+:8]} : '0;
+    assign east_d[16*g+:16] = {ctl_x[8*g+:8], wdata_x[8*g+:8]};
     assign rdata_x[8*g+:8] = FAB2RAM_D_O[16*g+:8];
     assign result_x[8*g+:8] = FAB2RAM_D_O[16*g+8+:8];
   end
+  // phase_q is 0 in the cycle after a pulse. With CLKDIV at 0 there is no such
+  // cycle, and the window changes on the pulse itself. Once connected, the
+  // first pulse waits for the window to catch up: what the fabric saw last,
+  // the user reset among it, is not what it is connected with.
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      east_q <= '0;
+      east_fresh_q <= 1'b0;
+    end else begin
+      if (phase_q == '0) east_q <= east_d;
+      east_fresh_q <= fab_en & (phase_q == '0 | east_fresh_q);
+    end
+  end
+  assign RAM2FAB_D_I = !fab_en ? '0 : div_q == '0 ? east_d : east_q;
 
   assign O_top = fab_en ? pad_in_i : '0;
   assign pad_out_o = fab_en ? I_top : '0;

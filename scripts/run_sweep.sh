@@ -62,6 +62,7 @@ STEPS=(
   "sci_tb_hazard3|TB PASS|tb/sci/hazard3/run.sh"
   "efpga_fabric|TB PASS|tb/efpga/run.sh"
   "efpga_wrapper|TB PASS|tb/efpga/run_wrapper.sh"
+  "efpga_powerup|TB PASS|tb/efpga/run_powerup.sh"
   "efpga_soc|^### RESULT: EXIT SUCCESS|tb/mosaic_soc/run_efpga.sh"
   "efpga_design|^### RESULT: EXIT SUCCESS.* with shell_regs.v in its eFPGA, checked by shell_regs_test.c, warm reboots: 1 |MOSAIC_CFG=configs/mosaic_efpga_demo.yaml EFPGA_DESIGN=tb/efpga/shell_regs.v EFPGA_TEST=tb/efpga/shell_regs_test.c WARM_REBOOTS=1 tb/mosaic_soc/run_fw.sh"
   "efpga_log|^### RESULT: EXIT SUCCESS.* with shell_regs.v in its eFPGA, checked by shell_regs_test.c, warm reboots: 0 |MOSAIC_CFG=configs/mosaic_efpga_demo_log.yaml EFPGA_DESIGN=tb/efpga/shell_regs.v EFPGA_TEST=tb/efpga/shell_regs_test.c tb/mosaic_soc/run_fw.sh"

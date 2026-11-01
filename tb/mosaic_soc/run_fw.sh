@@ -37,6 +37,7 @@
 # 0x40000000 | that value.
 # WARM_REBOOTS=<n>: reset the SoC after each of the first n successful boots
 # (tb/tb_top.sv +warm_reboots), with the flash and an eFPGA's latches kept.
+# VJOBS=<n>: compile jobs of the Verilator model; 0, the default, is one per core.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
@@ -113,7 +114,7 @@ echo "### [3/4] building the full-SoC Verilator model (this takes a few minutes)
 rm -rf "$OBJ"
 "$PY" "$HERE/gen_filelist.py" "$REPO" --manifest "$MANIFEST" --build-root "$BUILD_ROOT" \
     > "$HERE/soc.f" || { echo "filelist gen failed"; exit 1; }
-verilator --binary -j 0 --top-module tb_top \
+verilator --binary -j "${VJOBS:-0}" --top-module tb_top \
     --Mdir "$OBJ" -o Vtb_top --timescale 1ns/1ps \
     -GUSE_EXTERNAL_DEVICE_EXAMPLE=1 -GJTAG_DPI=0 \
     -f "$HERE/soc.f" > "$HERE/build-fw.log" 2>&1
