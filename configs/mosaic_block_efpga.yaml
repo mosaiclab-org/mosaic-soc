@@ -1,0 +1,51 @@
+# Copyright 2026 MOSAIC-SoC contributors
+# SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+#
+# mosaic_block_efpga.yaml — Block A (configs/mosaic_tapeout_ultra.yaml) with the
+# eFPGA fabric of configs/efpga/small.csv, the SoC of step E of the eFPGA plan
+# (docs/efpga.md). `./mosaic config-author generate --preset blocka` and then
+# `efpga` and Block A's objectives added: `target: tapeout` keeps every other knob
+# at what Block A hardened. The fabric's macro (1,223 x 1,784 um) does not fit
+# Block A's 1,110 um slot, so this design has its own die
+# (flow/librelane/scripts/efpga_block.sh).
+soc:
+  schema: mosaic/v1
+  name: mosaic_block_efpga
+  pdk: gf180mcu
+  target: tapeout
+  cores:
+  - ip: serv
+    isa: rv32ic
+    count: 1
+    role: titan
+    with_csr: 1
+    compressed: 1
+  - ip: serv
+    isa: rv32i
+    count: 1
+    role: atlas
+    boot_addr: 0x40010000
+    with_csr: 0
+  memory:
+    sram_kb: 0
+    scratchpad_bytes: 128
+    boot_rom_kb: 1
+  dma: none
+  debug: false
+  plic: false
+  spi_mode: xip_only
+  multicore_timer: false
+  gpio_ao: false
+  ao_rv_timer: false
+  ao_fast_intr: false
+  bus: obi
+  scheduler:
+    tdu: true
+    mode: dynamic
+  peripherals:
+  - uart
+  efpga:
+    preset: small
+  objectives:
+    target_clock_mhz: 20
+    repair_margin_pct: 32

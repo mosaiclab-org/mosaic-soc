@@ -9,6 +9,7 @@ say so. The checks on the real fabric are the sweep steps `efpga_netlist` and
 `efpga_block`.
 """
 
+import json
 import sys
 
 import pytest
@@ -230,6 +231,21 @@ def test_the_fasm_gives_the_flops_and_the_window_it_routes():
 def test_a_registered_pass_is_refused_rather_than_left_untimed():
     with pytest.raises(ValueError, match="registered pass"):
         efpga_timing.fasm_uses("X3Y1.RAM2FAB_D0_.I0_reg\n")
+
+
+def test_a_design_compiled_elsewhere_is_taken_only_for_the_same_fabric(tmp_path):
+    """<out>/<name>: a design compiled into <out>, as the user flow does, whose
+    bits would land on other latches if its fabric were another."""
+    run = object.__new__(efpga_timing.Run)
+    run.fabric, run.digest = tmp_path / "fabric", "a" * 64
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "manifest.json").write_text(json.dumps({"fabric": {"manifest_sha256": "a" * 64}}))
+    assert run.design_file("bus_regs", "csv") == tmp_path / "fabric" / "bitstream" / "bus_regs.csv"
+    assert run.design_file(f"{out}/shell_regs", "fasm") == out / "bitstream" / "shell_regs.fasm"
+    (out / "manifest.json").write_text(json.dumps({"fabric": {"manifest_sha256": "b" * 64}}))
+    with pytest.raises(ValueError, match="another fabric"):
+        run.design_file(f"{out}/shell_regs", "fasm")
 
 
 FLOP = "Tile_X1Y2_LUT4AB/_1_"

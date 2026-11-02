@@ -654,10 +654,19 @@ module mosaic_efpga #(
   end
 
   // ------------------------------------------------------------------ isolation
+  // The macro's UserCLK pin alone is 0.21 pF of the 0.25 pF GF180MCU's clock
+  // gate may drive, and a clock net with one sink is buffered by nothing in the
+  // flow: a SoC that placed the gate 380 um from the pin failed slew and
+  // capacitance on it. Hence a buffer of its own (hw/asic/gf180/tc_clk.sv).
+  logic clk_gated;
   tc_clk_gating fabric_clk_gate_i (
       .clk_i,
       .en_i((fab_en && fab_tick && (east_fresh_q || div_q == '0)) || load_q == L_CLR3 || flush),
       .test_en_i(1'b0),
+      .clk_o(clk_gated)
+  );
+  tc_clk_buffer fabric_clk_buf_i (
+      .clk_i(clk_gated),
       .clk_o(CLK)
   );
 

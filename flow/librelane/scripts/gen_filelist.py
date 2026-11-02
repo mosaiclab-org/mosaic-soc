@@ -95,6 +95,7 @@ EXTRA_SOURCES = (
 # fail the same confusing way.
 # Two cells, both found by hardening on a second PDK and reading what broke:
 # the integrated clock gate (tc_clk) and the tristate pad driver (tc_pad).
+# GF180's tc_clk.sv also binds a clock buffer, for the eFPGA's UserCLK.
 # The pad driver used to be instantiated directly in the DELIVERY WRAPPERS,
 # which are per-design -- so it cost designs x PDKs until it moved here.
 TECH_CELLS_BY_PDK = {
@@ -147,11 +148,20 @@ def tech_cells(pdk: str) -> tuple[str, ...]:
 
 def collect(repo: pathlib.Path, manifest_path: pathlib.Path,
             build_root: pathlib.Path, wrapper: str = DEFAULT_WRAPPER,
-            pdk: str = DEFAULT_PDK) -> tuple[list[str], list[str]]:
+            pdk: str = DEFAULT_PDK, efpga_macro: bool = False) -> tuple[list[str], list[str]]:
     manifest = json.loads(manifest_path.read_text())
+    # The fabric of soc.efpga is a hard macro: its RTL, synthesised as standard
+    # cells, would have no tiles and no loop check (docs/efpga.md). Its wrapper is
+    # in the bundle's file list beside it; the macro's views stand in for the rest.
+    efpga_sources: list[str] = []
     if "mosaic_efpga" in manifest["build"].get("flags", []):
-        raise SystemExit("the design has an eFPGA (soc.efpga), which the physical flow "
-                         "does not take yet (docs/roadmap.md)")
+        if not efpga_macro:
+            raise SystemExit("the design has an eFPGA (soc.efpga), whose fabric is a hard "
+                             "macro: harden it with flow/librelane/scripts/efpga_block.sh")
+        fabric = pathlib.Path(manifest["generated_root"]) / "efpga"
+        for fragment in manifest["build"].get("ordered_filelist_fallbacks", []):
+            efpga_sources += [line.strip() for line in pathlib.Path(fragment).read_text().splitlines()
+                              if line.strip() and not pathlib.Path(line.strip()).is_relative_to(fabric)]
     vc = find_vc(build_root)
     work = vc.parent
 
@@ -180,15 +190,16 @@ def collect(repo: pathlib.Path, manifest_path: pathlib.Path,
             continue
         files.append(str(source))
 
-    for extra in (*EXTRA_SOURCES, *tech_cells(pdk), wrapper):
+    for extra in (*EXTRA_SOURCES, *tech_cells(pdk), *efpga_sources, wrapper):
         path = (repo / extra).resolve()
         if not path.is_file():
             raise SystemExit(f"required source missing: {path}")
         files.append(str(path))
 
     # The generated tb include dir carries the config-rendered tb_util.svh.
+    # LibreLane refuses an include dir that does not exist.
     generated_root = pathlib.Path(manifest["generated_root"])
-    ordered_incs = [str(generated_root / "tb/mosaic_soc")]
+    ordered_incs = [str(generated_root / "tb")]
     ordered_incs += [str((repo / r).resolve())
                      for r in manifest["build"].get("include_roots", [])]
     ordered_incs += incs
@@ -216,6 +227,9 @@ def main() -> int:
                          f"(default: {DEFAULT_PDK})")
     ap.add_argument("--wrapper", default=DEFAULT_WRAPPER,
                     help="per-design delivery wrapper (default: Block A)")
+    ap.add_argument("--efpga-macro", action="store_true",
+                    help="the fabric of soc.efpga is a hard macro of the run: "
+                         "leave its RTL out (flow/librelane/scripts/efpga_block.sh)")
     ap.add_argument("--verify", metavar="CONFIG",
                     help="compare against an existing config's VERILOG_FILES "
                          "and fail on any difference")
@@ -224,7 +238,7 @@ def main() -> int:
     repo = pathlib.Path(args.repo).resolve()
     files, incs = collect(repo, pathlib.Path(args.manifest),
                           pathlib.Path(args.build_root), wrapper=args.wrapper,
-                          pdk=args.pdk)
+                          pdk=args.pdk, efpga_macro=args.efpga_macro)
 
     if args.verify:
         text = pathlib.Path(args.verify).read_text()

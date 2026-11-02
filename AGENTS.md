@@ -51,8 +51,9 @@ flow and current status.
     an eFPGA fabric only through `util/mosaic_gen/efpga_gen.py` or its
     callers: `mcu_gen.py` (`make mosaic-gen` on a configuration with
     `soc.efpga`), `tb/efpga/run.sh`, `tb/efpga/run_wrapper.sh`,
-    `tb/mosaic_soc/run_efpga.sh`, `tb/mosaic_soc/run_fw.sh` with
-    `EFPGA_DESIGN`, `tb/efpga/run_powerup.sh`, `tb/efpga/run_netlist.sh`,
+    `tb/mosaic_soc/run_efpga.sh`, `tb/mosaic_soc/run_fw.sh` and
+    `tb/mosaic_soc/run_generic.sh` with `EFPGA_DESIGN`,
+    `tb/efpga/run_powerup.sh`, `tb/efpga/run_netlist.sh`,
     `tb/efpga/run_block.sh` and `flow/librelane/scripts/efpga_synth.sh`. It removes
     the PDK variables and gives the tools their own `HOME`
     ([docs/efpga.md](docs/efpga.md)).

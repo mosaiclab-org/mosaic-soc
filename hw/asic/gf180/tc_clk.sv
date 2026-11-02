@@ -18,12 +18,20 @@ module tc_clk_and2 (
 
 endmodule
 
+// ---- tc_clk_buffer replaced for GF180MCU ------------------------------
+// A wire in the generic file, which synthesis removes. Bound to a clock buffer
+// for a clock net with one heavy sink, which clock-tree synthesis leaves
+// unbuffered and the resizer does not touch: the eFPGA's UserCLK
+// (hw/efpga/mosaic_efpga.sv). Nothing else in the SoC instantiates it.
 module tc_clk_buffer (
   input  logic clk_i,
   output logic clk_o
 );
 
-  assign clk_o = clk_i;
+  gf180mcu_fd_sc_mcu7t5v0__clkbuf_8 u_buf (
+      .I(clk_i),
+      .Z(clk_o)
+  );
 
 endmodule
 
@@ -32,7 +40,7 @@ endmodule
 // The generic behavioural latch has no GF180 standard cell to map to (the
 // library has no latch), so it survived synthesis as an unmapped
 // $_DLATCH_N_. Bound to the library's integrated clock gate instead.
-// Everything else in this file is verbatim from
+// Everything else in this file but tc_clk_buffer is verbatim from
 // hw/vendor/pulp_platform/tech_cells_generic/src/rtl/tc_clk.sv.
 module tc_clk_gating #(
     // Kept for interface compatibility with the generic cell. A

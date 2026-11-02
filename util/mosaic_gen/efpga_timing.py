@@ -31,6 +31,8 @@ the wrapper's own loader can check what this assumes (tb/efpga/run_wrapper.sh).
 ``lib`` writes the macro's liberty for the flow that places it, one per process
 corner, from the port capacitances in efpga_sta.sh's logs: pins and no arcs.
 
+A <design> is the name of one compiled with the fabric, or <out>/<name> for one
+compiled into <out> for it (efpga_gen.py --fabric <the fabric> --out <out>).
 Usage: efpga_timing.py tcl <run> <design> <liberty> <out.tcl>
        efpga_timing.py latches <run> <out.vh> <hierarchical path of the fabric>
        efpga_timing.py bits <run> <design>
@@ -338,8 +340,8 @@ class Run:
         self.path = Path(path).resolve()
         manifest = json.loads((self.path / "manifest.json").read_text())
         self.fabric = Path(manifest["fabric"]["path"])
-        digest = hashlib.sha256((self.fabric / "manifest.json").read_bytes()).hexdigest()
-        if digest != manifest["fabric"]["manifest_sha256"]:
+        self.digest = hashlib.sha256((self.fabric / "manifest.json").read_bytes()).hexdigest()
+        if self.digest != manifest["fabric"]["manifest_sha256"]:
             raise ValueError(f"{self.path}: stitched from another fabric than {self.fabric}")
         self.cells = {
             tile: parse_cells((Path(views) / "nl" / f"{tile}.nl.v").read_text())
@@ -348,8 +350,18 @@ class Run:
         self.latches = {tile: latch_map(cells) for tile, cells in self.cells.items()}
         self.instances = bit_table((self.fabric / "load_order" / "registered.csv").read_text())
 
+    def design_file(self, design, suffix):
+        """A file of a design of the fabric, or of `<out>/<name>`: one compiled
+        into <out> for the same fabric (efpga_gen.py --fabric <it> --out <out>)."""
+        out, name = Path(design).parent, Path(design).name
+        if out == Path("."):
+            return self.fabric / "bitstream" / f"{name}.{suffix}"
+        if json.loads((out / "manifest.json").read_text())["fabric"]["manifest_sha256"] != self.digest:
+            raise ValueError(f"{design}: compiled for another fabric than {self.fabric}")
+        return out / "bitstream" / f"{name}.{suffix}"
+
     def table(self, design):
-        return bit_table((self.fabric / "bitstream" / f"{design}.csv").read_text())
+        return bit_table(self.design_file(design, "csv").read_text())
 
     def latch_values(self, table):
         """[(<tile instance>/<latch>, value)] of every latch, in the bench's order."""
@@ -366,7 +378,7 @@ class Run:
             stray = [k for k, v in values.items() if v and k not in self.latches[kind]]
             if stray:
                 raise ValueError(f"{design}: {tile} sets {stray}, which no latch holds")
-        fasm = (self.fabric / "bitstream" / f"{design}.fasm").read_text()
+        fasm = self.design_file(design, "fasm").read_text()
         flops, inputs, outputs = fasm_uses(fasm)
         funcs = liberty_functions(Path(liberty).read_text())
         lines = [f"set_case_analysis {value} {latch}/Q" for latch, value in rows]

@@ -225,17 +225,21 @@ puts "### LOOPS"
 check_setup -verbose -loops
 EOF
 
+# A design is a name, or <out>/<name> for one compiled into <out> (efpga_timing.py).
+NAMES=()
 for design in "$@"; do
-  mkdir -p "$OUT/$design"
-  python3 util/mosaic_gen/efpga_timing.py tcl "$RUN" "$design" "${LIB}tt_025C_5v00.lib" "$OUT/$design/design.tcl" \
-    > "$OUT/$design/summary.txt" || fail "$design: efpga_timing.py"
+  name="$(basename "$design")"
+  NAMES+=("$name")
+  mkdir -p "$OUT/$name"
+  python3 util/mosaic_gen/efpga_timing.py tcl "$RUN" "$design" "${LIB}tt_025C_5v00.lib" "$OUT/$name/design.tcl" \
+    > "$OUT/$name/summary.txt" || fail "$name: efpga_timing.py"
 done
 echo "### the designs ..."
 nix develop "$REPO#physical" --option warn-dirty false --command bash -c "
   set -e
-  for design in $*; do for lib in tt_025C_5v00 ss_125C_4v50 ff_n40C_5v50; do for rc in nom min max; do
+  for design in ${NAMES[*]:-}; do for lib in tt_025C_5v00 ss_125C_4v50 ff_n40C_5v50; do for rc in nom min max; do
     DESIGN_TCL=$OUT/\$design/design.tcl LIBC=\$lib RC=\$rc sta -no_init -exit $OUT/design.tcl \
       > $OUT/\$design/\${rc}_\$lib.log 2>&1
   done; done; done
 " > "$OUT/tools_designs.log" 2>&1 || fail "OpenSTA on a design, see $OUT/*/*.log"
-python3 util/mosaic_gen/efpga_timing.py verdict "$OUT" "$PERIOD" "$DIV" "$@"
+python3 util/mosaic_gen/efpga_timing.py verdict "$OUT" "$PERIOD" "$DIV" "${NAMES[@]}"

@@ -19,7 +19,7 @@ by running the flow.
 ## What a run does
 
 A run hardens a *delivery wrapper*: a small top module that instantiates the
-generated SoC and exposes only the pins the block needs. Three ship, in
+generated SoC and exposes only the pins the block needs. Four ship, in
 `flow/librelane/experimental/`:
 
 | Wrapper | SoC configuration | Harts |
@@ -27,9 +27,14 @@ generated SoC and exposes only the pins the block needs. Three ship, in
 | `mosaic_block_a.sv` | `configs/mosaic_tapeout_ultra.yaml` | 2 (Block A, the GF180MCU reference design) |
 | `mosaic_block_b.sv` | `configs/mosaic_blockb_3hart.yaml` | 3 |
 | `mosaic_block_c.sv` | `configs/mosaic_blockc_4hart.yaml` | 4 |
+| `mosaic_block_efpga.sv` | `configs/mosaic_block_efpga.yaml` | 2, Block A's SoC with the eFPGA fabric of `small` |
 
-All three are SERV-only designs that execute in place from external flash and
-have no on-chip SRAM pool.
+All four are SERV-only designs that execute in place from external flash and
+have no on-chip SRAM pool. The fabric of `mosaic_block_efpga` is a hard macro, so
+that design is hardened by `flow/librelane/scripts/efpga_block.sh`, which writes its
+configuration and calls `run_signoff.sh` ([efpga.md](efpga.md#the-soc-with-the-macro)).
+`gen_filelist.py` refuses a design with `soc.efpga` unless told the fabric is a
+macro (`--efpga-macro`).
 
 The flow is LibreLane's `Classic` flow with the settings in
 `flow/librelane/signoff_template.yaml`. After place and route it runs Magic
@@ -193,7 +198,7 @@ verdict on a run in progress.
 
 ## Measured results
 
-Read from the tracked `final/metrics.json` files on 2026-10-03. "Accepted" is
+Read from the tracked `final/metrics.json` files on 2026-10-03, and the two runs with the eFPGA macro on 2026-11-02. "Accepted" is
 the verdict of the PPA gate. Slack is the worst corner. Runs live under
 `flow/librelane/experimental/runs/` unless marked.
 
@@ -213,11 +218,15 @@ the verdict of the PPA gate. Slack is the worst corner. Runs live under
 | `blockc_slew45` | Block C | 2.1836 | 70.6% | +20.657 | +0.044 | 12 | all zero | rejected |
 | `blockc_u65` | Block C | 2.0584 | 72.4% | +20.494 | +0.071 | 1018 | all zero | rejected |
 | `efpga_block` | `mosaic_efpga` with the fabric of `small` as a macro | 3.0068 | 83.5% with the macro | +14.265 | +0.532 | 0 | all zero except 53 disconnected pins, no waiver | rejected |
+| `block_efpga` | `mosaic_block_efpga`: Block A's SoC with the fabric of `small` as a macro | 5.1580 | 74.7% with the macro | +3.052 | +0.520 | 0 | all zero | accepted |
 
 Notes on the table:
 
-- `efpga_block` is the one run with a hard macro. Its 53 pins are address bits the
-  wrapper does not read; see [efpga.md](efpga.md#the-wrapper-and-the-macro-as-one-block).
+- `efpga_block` and `block_efpga` are the runs with a hard macro. The 53 pins of
+  `efpga_block` are address bits the wrapper does not read; see
+  [efpga.md](efpga.md#the-wrapper-and-the-macro-as-one-block). It was hardened
+  before the wrapper drove the macro's clock through a buffer of its own, which
+  `block_efpga` needed ([efpga.md](efpga.md#the-soc-with-the-macro)).
 - `blocka_d15_rstsync` is the Block A reference run. It was hardened on a
   1110 um square die against an external padframe DEF, with a reset
   synchronizer, and its waivers were recorded on 2026-09-24. Its clock period is

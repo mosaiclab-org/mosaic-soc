@@ -26,9 +26,13 @@ tasks through the TDU. The configuration key `soc.efpga` puts it in the SoC:
 | The synthesis for GF180MCU | `flow/librelane/scripts/efpga_synth.sh`, `gf180_latch_map.v` |
 | The hardening for GF180MCU: every tile type of `small` and the stitched fabric macro, whose netlist the two benches simulate, and its static timing | `efpga_gen.py --harden` and `--stitch`, `nix develop .#fabric`; `EFPGA_NETLIST` of `tb/efpga/run.sh` and `run_wrapper.sh`; `tb/efpga/run_netlist.sh`; `flow/librelane/scripts/efpga_sta.sh` |
 | The wrapper and the macro hardened as one block, its timing and its bench | `flow/librelane/scripts/efpga_block.sh`, `efpga_block_sta.sh`; `tb/efpga/run_block.sh`, `tb_efpga_block.sv` |
-| The regression steps | `efpga_fabric`, `efpga_wrapper`, `efpga_powerup`, `efpga_soc`, `efpga_design`, `efpga_log`, `efpga_floonoc`, `efpga_serv`, `efpga_medium`, `efpga_task`, `efpga_synth`, and `efpga_netlist` and `efpga_block`, run only when named, in `scripts/run_sweep.sh` |
+| Block A's SoC with the fabric, its RTL test, and the same hardening, timing and bench with the macro in it | `configs/mosaic_block_efpga.yaml`, `flow/librelane/experimental/mosaic_block_efpga.sv`; `EFPGA_DESIGN` of `tb/mosaic_soc/run_generic.sh`; `efpga_block.sh` with a SoC configuration, `gen_filelist.py --efpga-macro`; `tb/efpga/run_soc_block.sh`, `tb_efpga_soc.sv` |
+| The regression steps | `efpga_fabric`, `efpga_wrapper`, `efpga_powerup`, `efpga_soc`, `efpga_design`, `efpga_log`, `efpga_floonoc`, `efpga_serv`, `efpga_medium`, `efpga_task`, `efpga_blocka`, `efpga_synth`, and `efpga_netlist`, `efpga_block` and `efpga_block_soc`, run only when named, in `scripts/run_sweep.sh` |
 
-What does not exist: a layout of a SoC with the fabric. The wake
+Block A's SoC with the fabric of `small` as a macro has a layout that is clean in
+every signoff check and accepted by MOSAIC's PPA gate, on which the designs meet
+timing ([the SoC with the macro](#the-soc-with-the-macro)); it is not in silicon,
+and its die does not fit Block A's slot. The wake
 demonstration with the fabric has been simulated on each of the three buses,
 the wrapper and the fabric of `small` have been synthesised for GF180MCU
 ([Synthesis](#synthesis)), and the fabric of `small` has been hardened, as a
@@ -1304,7 +1308,125 @@ reads, and runs only when named (`scripts/run_sweep.sh --only efpga_block`): on
 made stricter after that run, to the exact names above, and that check was run on
 that run's record, not in a new layout.
 
-The SoC with the macro needs the user's approval.
+### The SoC with the macro
+
+```bash
+make mosaic-gen MOSAIC_CFG=configs/mosaic_block_efpga.yaml
+flow/librelane/scripts/efpga_block.sh build/efpga_netlist/fabric block_efpga configs/mosaic_block_efpga.yaml
+nix develop .#efpga --command python3 util/mosaic_gen/efpga_gen.py --fabric build/efpga/small \
+    --out build/efpga_soc_designs --shell tb/efpga/shell_regs.v
+flow/librelane/scripts/efpga_block_sta.sh build/efpga_netlist/fabric \
+    flow/librelane/experimental/final_block_efpga counter8_en bus_regs task_count \
+    build/efpga_soc_designs/shell_regs
+nix develop .#sim --command tb/efpga/run_soc_block.sh build/efpga_netlist/fabric \
+    configs/mosaic_block_efpga.yaml flow/librelane/experimental/final_block_efpga
+```
+
+`configs/mosaic_block_efpga.yaml` is Block A's SoC (`configs/mosaic_tapeout_ultra.yaml`:
+two SERV harts executing in place from flash, no SRAM, the TDU, the UART) with
+`soc.efpga: small`, the combination the plan chose because it is the only one with
+measurements behind it. `target: tapeout` holds every other knob at what Block A
+hardened. Its delivery wrapper, `flow/librelane/experimental/mosaic_block_efpga.sv`,
+is Block B's with the fabric's eight pads added as pins of their own: with no pad
+ring there is no `pad_control`, and the fabric's wrapper keeps a pad released until a
+design is connected. The macro does not fit Block A's 1,110 µm slot, so this SoC
+does not fit the padframe Block A is hardened against.
+
+Given a SoC configuration, `efpga_block.sh`:
+
+- finds the bundle of that configuration and requires its fabric to be the macro's,
+  file for file (the 37 Verilog files of the tiles and the fabric, by SHA-256);
+- takes the SoC's sources from `flow/librelane/scripts/gen_filelist.py --efpga-macro`,
+  which adds `hw/efpga/mosaic_efpga.sv` from the bundle's file list and leaves the
+  fabric's RTL out. Without the option it refuses a design with `soc.efpga`:
+  synthesised as standard cells, the fabric would have no tiles and no loop check;
+- places the macro, `i_mosaic_soc.mosaic_efpga_i.eFPGA_inst`, where the block alone
+  has it, with the same channels, density, obstructions and hold margin, and widens
+  the east channel, beside the window, for the SoC's cells: the area model's estimate
+  of the SoC (952,726 µm², calibrated on Block A) plus the wrapper's 237,534 µm²
+  measured on `efpga_block`, at 40 % of the free area. That is 1,190 µm, and a die of
+  2,613 x 1,974 µm (5.16 mm²);
+- requires, besides the block's checks, no disconnected pin at all and the verdict of
+  `mosaic physical-intent ppa`.
+
+The first layout, on 2026-11-02, routed to 0 violations in four iterations of
+detailed routing (14,838, 5,414, 5,028, 126, 0), met setup and hold at the nine
+corners (+2.615 ns at `max_ss`, +0.527 ns at `min_ff`, with 3,569 hold buffers from
+the repair after global routing), and had Magic DRC and XOR at 0. One net failed
+slew and capacitance at all nine: the fabric's clock gate driving `UserCLK`, 8.05 ns
+against 7.0 at ss and 0.293 pF against 0.246. The pin alone is 0.206 pF of what the
+gate, an `icgtp_1`, may drive. The SoC's placement put the gate 380 µm from the pin,
+where the block alone had it 18 µm away, and a clock net with one sink is buffered
+by neither clock-tree synthesis nor the resizer. The wrapper now drives `UserCLK`
+through `tc_clk_buffer`, which `hw/asic/gf180/tc_clk.sv` binds to a `clkbuf_8`
+(1.83 pF); nothing else in the SoC instantiates it, and in simulation it is a wire
+(`efpga_wrapper` passed again, 68 runs). That run was stopped in KLayout DRC, which
+had spent 35 minutes on 475 rules. `efpga_block` was hardened before this change.
+
+The second layout, with the buffer (run `block_efpga`, 2 hours 40 minutes, 55 of
+them in KLayout DRC), is clean: routing DRC, Magic DRC, KLayout DRC, LVS, XOR and
+antenna 0, no disconnected pin, no slew or capacitance violation, setup +3.05 ns at
+`max_ss` and hold +0.52 ns at `min_ff` at a 50 ns clock, and
+`mosaic physical-intent ppa` accepts it. Routing reached 0 in five iterations
+(14,767, 5,300, 4,791, 127, 4, 0). The die is 2,613 x 1,974 µm (5.16 mm², 2.18 of
+them the macro), with 1,560,510 µm² of standard cells (71,618), 1.31 times the area
+the channel was sized for: 6,272 of them are hold buffers, from the 0.6 ns margin
+the clock tree's crossing of the macro needs, applied to every flop of the SoC. Its
+one fan-out violation is a `Config_accessC` output of the macro's east edge with 12
+loads against the template's 10, as on `efpga_block`; no gate judges fan-out. The
+flow's power estimate is 192 mW at its default activity. KLayout's rule SB.5a, about
+a second on `efpga_block`, took most of the 55 minutes here; why is not established.
+
+`efpga_block_sta.sh` on this layout: no slew, capacitance or fan-out violation with
+the macro's cells in place, 15.47 ns to spare on the configuration write, and the
+window, from the macro's `UserCLK` pin, launching at 1.03 to 19.74 ns and capturing
+from −0.80 to 1.87 ns, within 0.4 ns of the block alone. The four designs, among
+them `shell_regs`, which the SoC's test runs, pass at nine corners at one cycle in
+four:
+
+| Design | Hold (ns) | Setup at N = 4 (ns) | Least N | Shortest clock of the fabric (ns) |
+|---|---|---|---|---|
+| `counter8_en` | +4.76 | +139.10 | 2 | 60.9 |
+| `bus_regs` | +4.63 | +56.41 | 3 | 143.6 |
+| `task_count` | +4.45 | +29.41 | 4 | 170.6 |
+| `shell_regs` | +4.45 | +62.36 | 3 | 137.6 |
+
+The SoC's RTL is simulated by the sweep step `efpga_blocka`:
+`MOSAIC_CFG=configs/mosaic_block_efpga.yaml EFPGA_DESIGN=tb/efpga/shell_regs.v
+tb/mosaic_soc/run_generic.sh`. The production firmware of `run_fw.sh` copies the
+workers' images to SRAM, which this SoC does not have. The liveness images of
+`run_generic.sh` execute in place, and with `EFPGA_DESIGN` hart 0, before it wakes
+anyone, writes the design's 639-word stream to `BITSTREAM`, requires `STATUS` to read
+`CONFIGURED` alone, connects the fabric, checks window word 0 (0 after the user reset,
+then every data line each way), leaves 0xA5 in it and requires `STATUS` unchanged
+(`tb/mosaic_soc/prog_generic/generic.S`). On 2026-11-02 it passed in 45 s; the log
+holds 641 writes to the registers and 64 to the window. As a control, the image of
+`task_count.v` ended with `EXIT FAILURE` 0x40000002: its window word 0 is not a
+register the user reset clears.
+
+`efpga_block_sta.sh` reads the top module and the macro's instance from the block's
+netlist, so it times either block; on `final_efpga_block` it gives the numbers above
+to the digit. A design may be named `<out>/<name>`, compiled into `<out>` for the
+macro's own fabric (`efpga_timing.py` checks the fabric's manifest hash): the stream
+of `shell_regs.v` compiled so is byte for byte the one the SoC's simulation loads.
+
+`tb/efpga/run_soc_block.sh` simulates the SoC's netlist around the fabric's netlist,
+in Verilator with no delays, through its pins only (`tb_efpga_soc.sv`): it boots from
+the flash model of the RTL bench, executing in place, the image of `run_generic.sh`
+loads and checks `shell_regs.v`, and the exit strobe must come with value 0 and the
+fabric's pads at 0xA5. The image of `task_count.v` must fail on its exit value.
+
+**It has not given a verdict.** The RTL takes 461,000 cycles to the exit, 92 % of
+them the load (cycle 1,500 to about 425,000). The netlist model runs 52.6 cycles a
+second in the boot ROM and about 42 while executing from flash, measured over its
+first 30,000 cycles, so both images should have ended within about three hours. On
+2026-11-02 neither had ended after the bench's four hours, nor after four and a half,
+with no output from either. Whether they are slower later in the load or stuck, for
+instance on the flash's data lines at gate level, is not known: the bench prints
+nothing before its verdict, and a diagnostic build that counts the strobes into the
+macro did not fit in the memory the machine had free. The sweep step
+`efpga_block_soc`, run only when named, runs all of the above, and its last command
+is this bench.
 
 ## Tools
 
@@ -1398,6 +1520,18 @@ The SoC with the macro needs the user's approval.
   hold skew at ss is between the wrapper's flops and the clock gate early in the
   tree. The die is not minimised. The netlist bench has no delays. `medium` has no
   layout.
+- **What the SoC with the macro leaves open.** The same clock tree, which does not
+  know the macro: the 0.6 ns hold margin covers it with 6,272 hold buffers, 9 % of
+  the SoC's cells, and does not remove it; the flow's hold skew is 3.6 ns at ss. Its
+  die (5.16 mm²) does not fit Block A's 1,110 µm slot, and the fabric's pads, with no
+  pad ring, are pins of their own. Without SRAM the production firmware cannot run
+  on it; its test is the assembly of `run_generic.sh`, with one design. The one-command
+  flow still does not time a design: `shell_regs` was timed here by naming it to
+  `efpga_block_sta.sh`. The coupling of the nets over the macro, the fabric's
+  switching power and the current of oscillating latches before the clear are
+  measured on neither block. Why KLayout's rule SB.5a took most of 55 minutes is not
+  known. `efpga_block` was hardened before the clock buffer. The netlist bench of the
+  SoC has given no verdict ([the SoC with the macro](#the-soc-with-the-macro)).
 - **What the worker slot is not.** A task is 16 bits in and 32 bits out: the
   fabric reads no memory and writes none, so a task's data goes through the
   user window or the pads, not through the descriptor. The slot holds one task

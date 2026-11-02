@@ -2,30 +2,47 @@
 # Copyright 2026 MOSAIC-SoC contributors
 # SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
 #
-# flow/librelane/scripts/efpga_block.sh — the wrapper hw/efpga/mosaic_efpga.sv and
-# a stitched eFPGA fabric as one hardened block, the fabric a hard macro placed
-# in MOSAIC's signoff flow (flow/librelane/signoff_template.yaml, through
-# experimental/run_signoff.sh: nothing skipped, nothing waived). This needs the
-# user's approval and takes hours.
+# flow/librelane/scripts/efpga_block.sh — a stitched eFPGA fabric as a hard macro
+# placed in MOSAIC's signoff flow (flow/librelane/signoff_template.yaml, through
+# experimental/run_signoff.sh: nothing skipped, nothing waived): with the wrapper
+# hw/efpga/mosaic_efpga.sv alone as one block, or, given a SoC configuration with
+# soc.efpga, in that SoC's delivery wrapper flow/librelane/experimental/<soc.name>.sv
+# with the RTL of its bundle (make mosaic-gen). This needs the user's approval and
+# takes hours.
 #
 # The macro's liberty has pins and no arcs (util/mosaic_gen/efpga_timing.py lib),
-# so the flow's own timing covers the wrapper, and the paths through the fabric
-# are timed per design on this layout by efpga_sta.sh.
+# so the flow's own timing covers the rest of the design, and the paths through
+# the fabric are timed per design on this layout by efpga_block_sta.sh.
 #
-# Pass: "BLOCK PASS ...", from the run's final metrics and its disconnected pins.
-# Usage: flow/librelane/scripts/efpga_block.sh <the --out of efpga_gen.py --stitch> [tag]
+# Pass: "BLOCK PASS ...", from the run's final metrics and its disconnected pins,
+# and for a SoC the verdict of `mosaic physical-intent ppa`.
+# Usage: flow/librelane/scripts/efpga_block.sh <the --out of efpga_gen.py --stitch> [tag] [SoC configuration]
 # EFPGA_BLOCK_WRITE_ONLY=1 writes the config and stops. Run:
 # flow/librelane/experimental/runs/<tag>/. docs/efpga.md is the reference.
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$REPO"
-RUN="$(cd "${1:?usage: efpga_block.sh <the --out of efpga_gen.py --stitch> [tag]}" && pwd)"
+RUN="$(cd "${1:?usage: efpga_block.sh <the --out of efpga_gen.py --stitch> [tag] [SoC configuration]}" && pwd)"
 TAG="${2:-efpga_block}"
+SOC="${3:-}"
 OUT="$REPO/build/efpga_block/$TAG"
 FLOW="$REPO/flow/librelane"
-CONFIG="experimental/.generated_mosaic_efpga.yaml"
 fail() { echo "BLOCK FAIL tag=$TAG: $*"; exit 1; }
 mkdir -p "$OUT/lib"
+
+DESIGN=mosaic_efpga
+MANIFEST=
+if [ -n "$SOC" ]; then
+  DESIGN="$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["soc"]["name"])' "$SOC")"
+  MANIFEST="$(.venv/bin/python util/mosaic_gen/build_manifest.py locate --config "$SOC" \
+      --base-config configs/general.hjson --pads-cfg configs/pad_cfg.py --repo-root "$REPO" 2>/dev/null)" \
+      || fail "no bundle of $SOC for these sources: make mosaic-gen MOSAIC_CFG=$SOC"
+  BUILD_ROOT="$(ls -dt "$(dirname "$MANIFEST")"/runs/fusesoc.*/build | head -n 1)"
+  python3 flow/librelane/scripts/gen_filelist.py "$REPO" --manifest "$MANIFEST" \
+      --build-root "$BUILD_ROOT" --efpga-macro --wrapper "flow/librelane/experimental/$DESIGN.sv" \
+      --output "$OUT/filelist.yaml" > /dev/null || fail "no source list"
+fi
+CONFIG="experimental/.generated_$DESIGN.yaml"
 
 [ -f "$REPO/build/efpga_sta/$(basename "$RUN")/lib/eFPGA__tt_025C_5v00.lib" ] \
     || flow/librelane/scripts/efpga_sta.sh "$RUN" > "$OUT/sta.log" 2>&1 \
@@ -37,25 +54,49 @@ cp "$REPO/build/efpga_sta/$(basename "$RUN")"/lib/*.lib "$OUT/lib/"
 # the window its east edge. On tracks, which are 0.56 um apart on both layers of
 # its pins, so that its pins lie on the top level's. The west channel is the widest:
 # the loader's wires run its whole height, 2.4 times the wire of the east one, and
-# 100 um there left no track free.
-python3 - "$RUN" "$OUT" "$FLOW/$CONFIG" "$OUT/filelist.yaml" <<'EOF'
-import json, re, sys
+# 100 um there left no track free. A SoC's cells go east of it, beside the window.
+python3 - "$RUN" "$OUT" "$FLOW/$CONFIG" "$DESIGN" "$SOC" "$MANIFEST" <<'EOF'
+import hashlib, json, re, sys
 from pathlib import Path
-run, out, config, filelist = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4])
-manifest = json.loads((run / "manifest.json").read_text())
-assert manifest["fabric_macro"]["clean"], f"{run}: the macro is not clean"
+sys.path.insert(0, ".")
+run, out, config, design, soc, manifest = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), *sys.argv[4:]
+macro = json.loads((run / "manifest.json").read_text())
+assert macro["fabric_macro"]["clean"], f"{run}: the macro is not clean"
 views = run / "macro/fabric/final_views"
 width, height = map(float, re.search(r"SIZE ([\d.]+) BY ([\d.]+)", (views / "lef/eFPGA.lef").read_text()).groups())
 PITCH, MARGIN = 0.56, 15
 track = lambda um: round(round(um / PITCH) * PITCH, 2)
 west, south, east, north = track(200), track(150), track(100), track(40)
+period, instance = 50, "eFPGA_inst"
+root = Path.cwd()
+if soc:
+    import yaml
+    from harness.physical.floorplan import clock_period_ns, estimate_logic_area
+    # The fabric in the SoC is the one the macro was hardened from, file for file.
+    def sources(proj):
+        return {p.relative_to(proj).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in sorted(proj.glob("[FT]*/**/*.v"))}
+    bundle = Path(json.loads(Path(manifest).read_text())["generated_root"]) / "efpga/proj"
+    assert sources(bundle) == sources(run / "proj") and sources(bundle), \
+        f"the fabric of {soc} is not the one of {run}"
+    intent = yaml.safe_load(Path(soc).read_text())["soc"]
+    period, instance = clock_period_ns(intent), "i_mosaic_soc.mosaic_efpga_i.eFPGA_inst"
+    estimate = estimate_logic_area(intent)
+    assert estimate.ok and period, f"{soc}: {estimate.reason}"
+    # The SoC's cells by the area model, the wrapper's as efpga_block measured them
+    # (696 hold buffers among them), at the 40 % of the channels they took there,
+    # rounded up. What the macro's other channels leave is added to the east one.
+    block = json.loads((root / "flow/librelane/experimental/runs/efpga_block/final/metrics.json").read_text())
+    cells = estimate.logic_um2 + block["design__instance__area__stdcell"]
+    tall = south + height + north
+    free = (west + width + east) * tall - width * height
+    east = track(east + max(0.0, cells / 0.40 - free) / tall)
 die = (track(west + width + east), track(south + height + north))
 over = f"{round(west + 2, 2)}, {round(south + 2, 2)}, {round(west + width - 2, 2)}, {round(south + height - 2, 2)}"
 corners = {"tt_025C_5v00", "ss_125C_4v50", "ff_n40C_5v50"}
 libs = "\n".join(f'      "*_{c}":\n      - {out}/lib/eFPGA__{c}.lib' for c in sorted(corners))
-root = Path.cwd()
 # The template's density is for a block that fills its die. Here the cells take
-# about 30% of the channels, and at 76% they crowd the window's pins so that
+# about a third of the channels, and at 76% they crowd the window's pins so that
 # placement cannot legalise the buffers of the repair after global routing.
 template = (root / "flow/librelane/signoff_template.yaml").read_text()
 for old, new in (("PL_TARGET_DENSITY_PCT: 76", "PL_TARGET_DENSITY_PCT: 50"),
@@ -64,8 +105,8 @@ for old, new in (("PL_TARGET_DENSITY_PCT: 76", "PL_TARGET_DENSITY_PCT: 50"),
     template = template.replace(old, new)
 config.write_text(template + f"""
 # ---- The block: efpga_block.sh ------------------------------------------------
-DESIGN_NAME: mosaic_efpga
-CLOCK_PERIOD: 50
+DESIGN_NAME: {design}
+CLOCK_PERIOD: {period:g}
 FP_SIZING: absolute
 DIE_AREA: [0, 0, {die[0]}, {die[1]}]
 CORE_AREA: [{MARGIN}, {MARGIN}, {round(die[0] - MARGIN, 2)}, {round(die[1] - MARGIN, 2)}]
@@ -80,11 +121,11 @@ MACROS:
     lib:
 {libs}
     instances:
-      eFPGA_inst:
+      {instance}:
         location: [{west}, {south}]
         orientation: N
 PDN_MACRO_CONNECTIONS:
-- "eFPGA_inst VDD VSS VDD VSS"
+- "{instance} VDD VSS VDD VSS"
 # No signal in the macro's layers: the gaps its LEF leaves between its pins and
 # power stripes count as tracks for the global router, and wires sent through them
 # short to the macro. Metal5 stays open, so a net can cross it straight and turn
@@ -99,9 +140,11 @@ ROUTING_OBSTRUCTIONS:
 # the margin above at 0.4 ns, a flop it counted as met failed signoff by 0.06 ns.
 RUN_POST_GRT_RESIZER_TIMING: true
 """)
-sources = ["hw/mosaic_soc/include/reg_pkg.sv", "hw/mosaic_soc/include/obi_pkg.sv", "hw/asic/gf180/tc_clk.sv", "hw/efpga/mosaic_efpga.sv"]
-filelist.write_text("VERILOG_FILES:\n" + "".join(f"- {root / s}\n" for s in sources)
-                    + f"VERILOG_INCLUDE_DIRS:\n- {manifest['fabric']['path']}\n")
+if not soc:
+    sources = ["hw/mosaic_soc/include/reg_pkg.sv", "hw/mosaic_soc/include/obi_pkg.sv", "hw/asic/gf180/tc_clk.sv", "hw/efpga/mosaic_efpga.sv"]
+    (out / "filelist.yaml").write_text("VERILOG_FILES:\n" + "".join(f"- {root / s}\n" for s in sources)
+                                       + f"VERILOG_INCLUDE_DIRS:\n- {macro['fabric']['path']}\n")
+print(f"### {design}: die {die[0]} x {die[1]} um, east channel {east} um, clock {period:g} ns")
 EOF
 [ -z "${EFPGA_BLOCK_WRITE_ONLY:-}" ] || exit 0
 
@@ -114,12 +157,12 @@ env -u PDK_ROOT -u PDK MOSAIC_FILELIST="$OUT/filelist.yaml" \
     MOSAIC_RESOURCE_CONFIG=experimental/resources_lowmem.yaml \
     flow/librelane/experimental/run_signoff.sh "$TAG" "$CONFIG"
 
-python3 - "$FLOW/experimental/runs/$TAG" "$TAG" <<'EOF'
-import json, sys
+python3 - "$FLOW/experimental/runs/$TAG" "$TAG" "$SOC" <<'EOF'
+import json, subprocess, sys
 from pathlib import Path
 sys.path.insert(0, ".")
 from harness.evidence.librelane import disconnected_pins
-run, tag = Path(sys.argv[1]), sys.argv[2]
+run, tag, soc = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 metrics = json.loads((run / "final/metrics.json").read_text())
 CHECKS = ("route__drc_errors", "magic__drc_error__count", "klayout__drc_error__count", "design__lvs_error__count",
           "design__xor_difference__count", "antenna__violating__nets",
@@ -131,12 +174,16 @@ bad = {name: metrics[name] for name in CHECKS if metrics[name] != 0}
 # critical to LibreLane only when all its bits are unconnected, so a data bit left
 # unconnected would pass above: the names must be exactly these. This is not the
 # verdict of `mosaic physical-intent ppa`, which rejects any such pin without a
-# waiver (docs/efpga.md, The wrapper and the macro as one block).
-UNREAD = {f"obi_req_i[{b}]" for b in (32, 33, *range(42, 64))} | {f"reg_req_i[{b}]" for b in (32, 33, *range(37, 64))}
+# waiver (docs/efpga.md, The wrapper and the macro as one block). In a SoC the bus
+# drives those bits, so none may be left, and the gate's verdict is required.
+UNREAD = set() if soc else ({f"obi_req_i[{b}]" for b in (32, 33, *range(42, 64))}
+                            | {f"reg_req_i[{b}]" for b in (32, 33, *range(37, 64))})
 pins = set(disconnected_pins(run) or ())
 if pins != UNREAD:
     bad["disconnected_pins"] = ",".join(sorted(pins ^ UNREAD)) or "no table"
-print(f"BLOCK {'FAIL' if bad else 'PASS'} tag={tag} " + (" ".join(f"{k}={v}" for k, v in bad.items()) or f"checks={len(CHECKS) + 1} unread_address_bits={len(UNREAD)}")
+if soc and subprocess.run([sys.executable, "-m", "harness", "physical-intent", "ppa", "--run-dir", str(run)]).returncode:
+    bad["ppa"] = "rejected"
+print(f"BLOCK {'FAIL' if bad else 'PASS'} tag={tag} " + (" ".join(f"{k}={v}" for k, v in bad.items()) or f"checks={len(CHECKS) + 1 + bool(soc)} unread_address_bits={len(UNREAD)}")
       + f" setup_ns={metrics['timing__setup__ws']:.2f} hold_ns={metrics['timing__hold__ws']:.2f}")
 sys.exit(1 if bad else 0)
 EOF

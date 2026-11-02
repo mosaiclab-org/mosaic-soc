@@ -14,6 +14,7 @@ tests keep it that way.
 from __future__ import annotations
 
 import importlib.util
+import json
 import pathlib
 import sys
 
@@ -95,3 +96,25 @@ def test_extra_sources_exist():
     gen = _load()
     for rel in gen.EXTRA_SOURCES:
         assert (REPO / rel).is_file(), rel
+
+
+def test_an_efpga_fabric_is_left_to_its_macro(tmp_path):
+    """Synthesised as cells, the fabric would have no tiles and no loop check:
+    only the macro flow may take it, and then without its RTL."""
+    gen = _load()
+    fabric = tmp_path / "generated" / "efpga"
+    (fabric / "proj").mkdir(parents=True)
+    (fabric / "proj" / "eFPGA.v").write_text("")
+    wrapper = REPO / "hw" / "efpga" / "mosaic_efpga.sv"
+    (fabric / "soc.f").write_text(f"{fabric}/proj/eFPGA.v\n{wrapper}\n")
+    vc = tmp_path / "build" / "sim-verilator" / "soc.vc"
+    vc.parent.mkdir(parents=True)
+    vc.write_text("")
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"generated_root": str(tmp_path / "generated"), "build": {
+        "flags": ["mosaic_efpga"], "ordered_filelist_fallbacks": [str(fabric / "soc.f")]}}))
+    with pytest.raises(SystemExit, match="efpga_block.sh"):
+        gen.collect(REPO, manifest, tmp_path / "build")
+    files, _ = gen.collect(REPO, manifest, tmp_path / "build", efpga_macro=True)
+    assert str(wrapper) in files
+    assert not any("eFPGA.v" in f for f in files)

@@ -80,7 +80,7 @@ For sky130, none of the eight is satisfied.
 | Physical flow | No step is skipped and a missing metric is not read as clean. | `flow/librelane/experimental/run_signoff.sh`; `harness/evidence/` and its tests |
 | Reproducibility | The simulation and physical toolchains are pinned to the same nix-eda and nixpkgs revisions. | `flake.nix`; `test_toolchain_pin.py`; `./mosaic doctor` |
 | Agent tooling | Tools reach the flows only through typed, gated calls. | `harness/gates.py`; `test_mcp_plugin_mode.py`, `test_agent_runtime.py` |
-| Python suite | 1913 passed, 94 skipped. | `make test` |
+| Python suite | 1935 passed, 94 skipped. | `make test` |
 
 The sweep steps are defined in the repository; their results depend on running
 them with the pinned toolchain ([verification.md](verification.md)).
@@ -161,11 +161,12 @@ Verification:
 
 eFPGA ([efpga.md](efpga.md)):
 
-- **The fabric is in one simulated SoC design, on three buses.** Only the
-  wake demonstration with the key has been simulated, on `obi`, `log` and
-  `floonoc`. The fabric's pads reach their package pins only through
-  `pad_control`, on request, and there is no layout of a SoC with it: the
-  wrapper and the fabric of `small` are synthesised for GF180MCU, with no
+- **The fabric is in two simulated SoC designs, and one of them has a layout.**
+  The wake demonstration with the key has been simulated on `obi`, `log` and
+  `floonoc`, and Block A's SoC with it (`configs/mosaic_block_efpga.yaml`, sweep
+  step `efpga_blocka`) loads a design from flash and checks it. In those SoCs the
+  fabric's pads reach their package pins only through `pad_control`, on request.
+  The wrapper and the fabric of `small` are synthesised for GF180MCU, with no
   negative slack at 20 MHz before layout, and the fabric alone is hardened as
   a macro clean in DRC, LVS and antenna, whose netlist passes the benches of
   the fabric and of the wrapper in Verilator (sweep step `efpga_netlist`, run
@@ -183,7 +184,13 @@ eFPGA ([efpga.md](efpga.md)):
   does not read, and no waiver is recorded. With the wrapper's side measured on
   that layout the three designs still pass at one cycle in four, `task_count` by
   30 ns with no N to spare at ss, and they work through the block's ports on its
-  netlist. Another design has to be checked: the command from a user's Verilog
+  netlist. Block A's SoC with that macro (sweep step `efpga_block_soc`, run only
+  when named; 2026-11-02) is 0 in DRC, LVS, XOR and antenna, with no disconnected
+  pin, setup +3.05 ns and hold +0.52 ns, and the PPA gate accepts it, after the
+  wrapper was given a clock buffer before the macro's `UserCLK`. Its die, 5.16 mm²,
+  does not fit Block A's slot. On its layout the three designs and `shell_regs`
+  pass at one cycle in four. Its netlist bench, which takes hours, has given no
+  verdict yet. Another design has to be checked: the command from a user's Verilog
   does not yet do so. The command
   from a user's Verilog to a simulation shows that the design works only as far as the user's own
   check (`EFPGA_TEST`) tests it.

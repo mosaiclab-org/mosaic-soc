@@ -75,8 +75,12 @@ and the TDU parks it when it does not. What follows does not exist.
   hardened as one block, the first macro placed here (2026-11-02; opt-in sweep step
   `efpga_block`), are clean in DRC, LVS and antenna and meet timing, the wrapper's
   side of each design measured on that layout; the PPA gate rejects the block alone
-  on 53 address bits the wrapper does not read. Left: the SoC with the macro. A
-  signoff-clean design that contains a fabric.
+  on 53 address bits the wrapper does not read. Block A's SoC with the macro
+  (2026-11-02; opt-in sweep step `efpga_block_soc`) is signoff-clean and accepted
+  by the PPA gate, the first such design that contains a fabric. Left: a
+  verdict from the SoC's netlist bench, the one-command flow timing each user design (decided 2026-11-02: the chip claims no
+  fixed speed for the fabric), a pad ring and a slot for the larger die, and
+  `medium`.
 
 Open: which presets are offered, and the technology, GF180MCU or another.
 

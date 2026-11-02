@@ -2,10 +2,11 @@
 # Copyright 2026 MOSAIC-SoC contributors
 # SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
 #
-# flow/librelane/scripts/efpga_block_sta.sh — what the hardened block
-# (flow/librelane/scripts/efpga_block.sh) adds to the timing of its macro, which
-# the flow's own STA cannot see: the macro's liberty has no arcs. At the nine
-# corners, on the block's netlist and extraction:
+# flow/librelane/scripts/efpga_block_sta.sh — what a block hardened with the
+# fabric as a macro (flow/librelane/scripts/efpga_block.sh: the wrapper alone, or a
+# SoC) adds to the timing of its macro, which the flow's own STA cannot see: the
+# macro's liberty has no arcs. At the nine corners, on the block's netlist and
+# extraction:
 #   - the wrapper's side of the window, measured: when its flops launch into the
 #     macro's RAM2FAB pins and when it needs FAB2RAM back, in ns from the macro's
 #     UserCLK pin. efpga_sta.sh then times each design with these in place of its
@@ -18,7 +19,7 @@
 #
 # Pass: "BLOCK STA PASS ...", after efpga_sta.sh's "STA DESIGN PASS" per design.
 # Usage: efpga_block_sta.sh <the --out of efpga_gen.py --stitch> <block's final views> <design> ...
-# Logs: build/efpga_block_sta/.
+# Logs: build/efpga_block_sta/<the block's top module>/.
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$REPO"
@@ -28,9 +29,14 @@ shift 2
 PERIOD="${EFPGA_STA_PERIOD:-50}"
 PDK="${GF180_PDK_ROOT:-$REPO/flow/librelane/gf180mcu}"
 LIB="$PDK/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__"
-OUT="$REPO/build/efpga_block_sta"
-STA="$REPO/build/efpga_sta/$(basename "$RUN")"
 fail() { echo "BLOCK STA FAIL: $*"; exit 1; }
+# The block's top module and the macro's instance in it, from its netlist.
+NETLIST="$(ls "$VIEWS"/nl/*.nl.v)"
+TOP="$(basename "$NETLIST" .nl.v)"
+INST="$(sed -nE 's/^ *eFPGA +\\?([^ (]+) .*/\1/p' "$NETLIST")"
+[ "$(wc -w <<< "$INST")" -eq 1 ] || fail "not one eFPGA instance in $NETLIST: $INST"
+OUT="$REPO/build/efpga_block_sta/$TOP"
+STA="$REPO/build/efpga_sta/$(basename "$RUN")"
 [ -f "$STA/lib/eFPGA__tt_025C_5v00.lib" ] && [ -f "$STA/tiles.tcl" ] \
     || flow/librelane/scripts/efpga_sta.sh "$RUN" > /dev/null \
     || fail "the macro does not pass efpga_sta.sh"
@@ -46,14 +52,14 @@ cp "$STA"/lib/*.lib "$STA/tiles.tcl" "$OUT/lib/"
 cat > "$OUT/window.tcl" <<EOF
 read_liberty ${LIB}\$::env(LIBC).lib
 read_liberty $OUT/lib/eFPGA__\$::env(LIBC).window.lib
-read_verilog $VIEWS/nl/mosaic_efpga.nl.v
-link_design mosaic_efpga
-read_spef $VIEWS/spef/\$::env(RC)/mosaic_efpga.\$::env(RC).spef
+read_verilog $NETLIST
+link_design $TOP
+read_spef $VIEWS/spef/\$::env(RC)/$TOP.\$::env(RC).spef
 create_clock -name clk -period $PERIOD [get_ports clk_i]
 set_propagated_clock [get_clocks clk]
-set in [get_pins eFPGA_inst/Tile_*RAM2FAB_D*]
+set in [get_pins {$INST/Tile_*RAM2FAB_D*}]
 set out {}
-foreach p [concat [get_pins eFPGA_inst/Tile_*FAB2RAM_C_*] [get_pins eFPGA_inst/Tile_*FAB2RAM_D*]] {
+foreach p [concat [get_pins {$INST/Tile_*FAB2RAM_C_*}] [get_pins {$INST/Tile_*FAB2RAM_D*}]] {
   if {[llength [get_fanout -from \$p -flat -endpoints_only]]} { lappend out \$p }
 }
 proc slack {args} { return [get_property [find_timing_paths {*}\$args] slack] }
@@ -69,8 +75,8 @@ set capture_min [slack -through \$out -path_delay min]
 set load 0.0
 foreach p \$out { set load [expr {max(\$load, [[get_nets -of_objects \$p] capacitance [sta::cmd_corner] max] * 1e12)}] }
 set in_slew [expr {max([worst slew_max_rise \$in], [worst slew_max_fall \$in])}]
-set clk_slew [get_property [get_pins eFPGA_inst/UserCLK] slew_max_rise]
-set strobes [get_pins eFPGA_inst/FrameStrobe*]
+set clk_slew [get_property [get_pins {$INST/UserCLK}] slew_max_rise]
+set strobes [get_pins {$INST/FrameStrobe*}]
 set_max_delay 1000 -to \$strobes
 set strobe [expr {1000 - [slack -to \$strobes -path_delay max]}]
 set f [open $OUT/window_\$::env(RC)_\$::env(LIBC).tcl w]
@@ -83,12 +89,12 @@ EOF
 cat > "$OUT/drv.tcl" <<EOF
 read_liberty ${LIB}\$::env(LIBC).lib
 source $OUT/lib/tiles.tcl
-read_verilog $VIEWS/nl/mosaic_efpga.nl.v
+read_verilog $NETLIST
 foreach tile [array names nl] { read_verilog \$nl(\$tile) }
-link_design mosaic_efpga
-read_spef $VIEWS/spef/\$::env(RC)/mosaic_efpga.\$::env(RC).spef
-foreach inst [get_cells eFPGA_inst/*] { read_spef -path [get_full_name \$inst] \$spef([get_property \$inst ref_name]) }
-foreach net [get_nets eFPGA_inst/*] {
+link_design $TOP
+read_spef $VIEWS/spef/\$::env(RC)/$TOP.\$::env(RC).spef
+foreach inst [get_cells {$INST/*}] { read_spef -path [get_full_name \$inst] \$spef([get_property \$inst ref_name]) }
+foreach net [get_nets {$INST/*}] {
   set c 0.0
   foreach pin [get_pins -quiet -of_objects \$net] {
     set k "\$::env(RC),[get_property [get_cells -of_objects \$pin] ref_name],[regsub {^.*/} [get_full_name \$pin] {}]"

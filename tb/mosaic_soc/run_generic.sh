@@ -1,8 +1,19 @@
 #!/bin/bash
 # Topology-generic full-SoC liveness verification.
+#
+# EFPGA_DESIGN=<design>.v, on a configuration with soc.efpga: a design for the
+# shell of its eFPGA whose window word 0 is a register the user reset clears
+# (tb/efpga/shell_regs.v), compiled as run_fw.sh compiles it. Hart 0 loads it
+# before it wakes anyone and checks that word (prog_generic/generic.S), so it runs
+# where run_fw.sh cannot, on a design with no SRAM.
+# VJOBS=<n>: compile jobs of the Verilator model; 0, the default, is one per core.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
+if [ -n "${EFPGA_DESIGN:-}" ]; then  # relative to the caller
+  EFPGA_DESIGN="$(realpath -e "$EFPGA_DESIGN")" || { echo "EFPGA_DESIGN: no such file"; exit 1; }
+fi
+EFPGA_DESIGN="${EFPGA_DESIGN:-}"
 cd "$REPO"
 source "$REPO/tb/tools.sh"
 mosaic_need_riscv_tc
@@ -67,6 +78,21 @@ echo "### [2/4] assembling one liveness image per generated boot slot ..."
 FW_DIR="$MOSAIC_GENERATED_ROOT/generic_fw"
 rm -rf "$FW_DIR"
 mkdir -p "$FW_DIR"
+if [ -n "$EFPGA_DESIGN" ]; then
+  echo "###       compiling $EFPGA_DESIGN for the eFPGA ..."
+  [ -f "$MOSAIC_GENERATED_ROOT/efpga/manifest.json" ] \
+      || { echo "$MOSAIC_CFG has no eFPGA (soc.efpga)"; exit 1; }
+  gen=(python3 util/mosaic_gen/efpga_gen.py --fabric "$MOSAIC_GENERATED_ROOT/efpga"
+       --out "$MOSAIC_GENERATED_ROOT/efpga_design" --shell "$EFPGA_DESIGN")
+  if command -v FABulous >/dev/null; then
+    "${gen[@]}" > "$HERE/efpga-design-generic.log" 2>&1
+  else
+    nix develop "$REPO#efpga" --option warn-dirty false --command "${gen[@]}" \
+        > "$HERE/efpga-design-generic.log" 2>&1
+  fi || { echo "eFPGA compilation failed — see $HERE/efpga-design-generic.log"; exit 1; }
+  sed 's/^/.word 0x/' "$MOSAIC_GENERATED_ROOT/efpga_design/bitstream/$(basename "${EFPGA_DESIGN%.*}").hex" \
+      > "$FW_DIR/efpga_stream.inc"
+fi
 FILELIST="$FW_DIR/soc.f"
 NUM_HARTS="$("$PY" -c \
     'import json,sys; print(len(json.load(open(sys.argv[1]))["harts"]))' \
@@ -111,6 +137,7 @@ while read -r IMAGE_ID PRIMARY TL_WINDOW PRIMARY_SHARED FIXED_HART XLEN ABI; do
       -DMOSAIC_GENERIC_PRIMARY_SHARED="$PRIMARY_SHARED" \
       -DMOSAIC_GENERIC_FIXED_HART="$FIXED_HART" \
       -DMOSAIC_GENERIC_TESTBENCH_BOOTSTRAP="$BOOTSTRAP_DISPATCH" \
+      -DMOSAIC_GENERIC_EFPGA="$([ -n "$EFPGA_DESIGN" ] && echo 1 || echo 0)" -I "$FW_DIR" \
       -I "$MOSAIC_SW/include" -c "$HERE/prog_generic/generic.S" \
       -o "$FW_DIR/image_${IMAGE_ID}.o" || exit 1
   "$TC"-ld -T "$MOSAIC_SW/linker/image_${IMAGE_ID}.ld" \
@@ -145,7 +172,7 @@ rm -rf "$OBJ"
 "$PY" "$HERE/gen_filelist.py" "$REPO" --manifest "$MANIFEST" \
     --build-root "$BUILD_ROOT" > "$FILELIST" \
     || { echo "filelist gen failed"; exit 1; }
-verilator --binary -j 0 --top-module tb_top --Mdir "$OBJ" -o Vtb_top \
+verilator --binary -j "${VJOBS:-0}" --top-module tb_top --Mdir "$OBJ" -o Vtb_top \
     --timescale 1ns/1ps -GUSE_EXTERNAL_DEVICE_EXAMPLE=1 -GJTAG_DPI=0 \
     -f "$FILELIST" > "$HERE/build-generic.log" 2>&1
 [ -x "$OBJ/Vtb_top" ] \
@@ -164,7 +191,7 @@ fi
     +maxcycles=2000000 +verbose 2>&1 | tee "$HERE/sim-generic.log" | tail -30
 SIM_RC=${PIPESTATUS[0]}
 if [ "$SIM_RC" -eq 0 ] && grep -q "EXIT SUCCESS" "$HERE/sim-generic.log"; then
-  echo "### RESULT: EXIT SUCCESS — all $NUM_HARTS configured harts executed ✓"
+  echo "### RESULT: EXIT SUCCESS — all $NUM_HARTS configured harts executed${EFPGA_DESIGN:+, $(basename "$EFPGA_DESIGN") loaded in the eFPGA and checked} ✓"
 else
   echo "### RESULT: simulation failed or no EXIT SUCCESS"
   exit 1

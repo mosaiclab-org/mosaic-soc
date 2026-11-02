@@ -403,9 +403,10 @@ def test_the_ihp_clock_gate_builds_test_enable_outside_the_cell():
 
 
 def test_the_rtl_hardcodes_only_the_technology_cells_we_know_about():
-    """The porting surface, pinned. Two cells: the ICG (now per-PDK) and a
-    tristate pad driver in each delivery wrapper (still GF180-only). If a
-    third appears, this fails and someone has to decide where it belongs."""
+    """The porting surface, pinned. Three cells: the ICG and the clock buffer
+    that drives the eFPGA's UserCLK (both per-PDK, hw/asic/<pdk>/tc_clk.sv), and
+    a tristate pad driver. If another appears, this fails and someone has to
+    decide where it belongs."""
     import re
     from harness.core import REPO_ROOT
     found = set()
@@ -413,6 +414,7 @@ def test_the_rtl_hardcodes_only_the_technology_cells_we_know_about():
         for f in REPO_ROOT.glob(pat):
             found |= set(re.findall(r"gf180mcu_fd_(?:sc|io)_\w+", _code(f.read_text())))
     assert found == {"gf180mcu_fd_sc_mcu7t5v0__icgtp_1",
+                     "gf180mcu_fd_sc_mcu7t5v0__clkbuf_8",
                      "gf180mcu_fd_sc_mcu7t5v0__bufz_4"}, sorted(found)
 
 

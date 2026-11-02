@@ -72,13 +72,15 @@ Python suite and gate-level simulation.
 
 `scripts/run_sweep.sh` runs every suite in sequence: the Python suite, the
 `tb-matrix` validation tier, the subsystem benches, the wrapper benches, the
-eleven eFPGA steps, the wake demonstration on each fabric and for each wrapped
+twelve eFPGA steps, the wake demonstration on each fabric and for each wrapped
 core, the multiprocessor demonstration on each fabric, the firmware run, and
-the Block A checks including gate-level simulation. It has 46 steps. Two of
+the Block A checks including gate-level simulation. It has 48 steps. Three of
 them run only when named. `efpga_netlist` hardens the fabric of `small`, times
 it and the bench designs at nine corners and simulates its netlist, about 4
 hours. `efpga_block`, after it, hardens the wrapper with that macro as one block,
-times the designs on that layout and simulates its netlist, about 1 hour. Each
+times the designs on that layout and simulates its netlist, about 1 hour.
+`efpga_block_soc` does the same with Block A's SoC around the macro
+(`configs/mosaic_block_efpga.yaml`). Each
 step has a success marker that must
 appear in its log, and the script exits non-zero if any step fails.
 
@@ -89,13 +91,13 @@ scripts/run_sweep.sh --only efpga_netlist   # a step run only when named, in ful
 scripts/run_sweep.sh                        # everything else; logs under build/sweep/
 ```
 
-The gate-level step, `efpga_synth`, `efpga_netlist` and `efpga_block` need the GF180MCU PDK
+The gate-level step, `efpga_synth`, `efpga_netlist`, `efpga_block` and `efpga_block_soc` need the GF180MCU PDK
 clone on disk (`make -C flow/librelane clone-pdk`), the gate-level step also a
 hardened run; see below. The `efpga_*` steps enter `nix develop .#efpga` by themselves, and
 the first entry downloads its Python environment from PyPI
 ([reproducing.md](reproducing.md#the-efpga-shell)); `efpga_synth` also enters
 `nix develop .#physical`, `efpga_netlist` both `.#fabric` and `.#physical`, and
-`efpga_block` `.#physical`.
+`efpga_block` and `efpga_block_soc` `.#physical`.
 
 ## tb-matrix: coverage of the design space
 
@@ -175,7 +177,7 @@ The suite covers configuration validation, template rendering, the software
 layout, the harness gates, the physical models, the evidence parsers, and the
 eFPGA generator's tool pins, PDK isolation and frame order (with fake tools:
 no test runs FABulous). The
-measured result on this tree is **1913 passed and 94 skipped**. Most skipped
+measured result on this tree is **1935 passed and 94 skipped**. Most skipped
 tests need hardening run trees or a PDK clone that are not in version control.
 One is skipped when no `riscv64-unknown-elf-gcc` is on the host, and
 `test_socview.py` adds one test per bundle under `build/mosaic/` whose
