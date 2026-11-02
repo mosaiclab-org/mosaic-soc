@@ -96,6 +96,7 @@ Environment variables the script reads:
 | `MOSAIC_PIN_TEMPLATE` | an external padframe DEF: a file that fixes the die and the pin positions the block must match |
 | `MOSAIC_WORK_DIR` | where the run is written; default `flow/librelane/experimental`, and `flow/librelane/integration` for a run hardened against an external padframe DEF |
 | `MOSAIC_MANIFEST` | pin the RTL bundle explicitly, so that a series of runs hardens the same RTL |
+| `MOSAIC_FILELIST` | a YAML of `VERILOG_FILES` and `VERILOG_INCLUDE_DIRS` to harden instead of a generated bundle's (`flow/librelane/scripts/efpga_block.sh`) |
 | `MOSAIC_RESOURCE_CONFIG` | a file of `*_THREADS` keys only, for machines with little memory (`experimental/resources_lowmem.yaml`) |
 | `MOSAIC_WATCH_ROUTING=1` | enable the routing guard described below |
 
@@ -211,9 +212,12 @@ the verdict of the PPA gate. Slack is the worst corner. Runs live under
 | `blockc_m45` | Block C | 2.1836 | 70.8% | +20.303 | +0.061 | 0 | all zero | accepted |
 | `blockc_slew45` | Block C | 2.1836 | 70.6% | +20.657 | +0.044 | 12 | all zero | rejected |
 | `blockc_u65` | Block C | 2.0584 | 72.4% | +20.494 | +0.071 | 1018 | all zero | rejected |
+| `efpga_block` | `mosaic_efpga` with the fabric of `small` as a macro | 3.0068 | 83.5% with the macro | +14.265 | +0.532 | 0 | all zero except 53 disconnected pins, no waiver | rejected |
 
 Notes on the table:
 
+- `efpga_block` is the one run with a hard macro. Its 53 pins are address bits the
+  wrapper does not read; see [efpga.md](efpga.md#the-wrapper-and-the-macro-as-one-block).
 - `blocka_d15_rstsync` is the Block A reference run. It was hardened on a
   1110 um square die against an external padframe DEF, with a reset
   synchronizer, and its waivers were recorded on 2026-09-24. Its clock period is

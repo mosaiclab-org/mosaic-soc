@@ -112,6 +112,11 @@ foreach {name to} [list FrameData \$d FrameStrobe \$e] {
   puts "### \$name [format %.3f [expr {$PERIOD - [get_property \$p slack]}]] at [get_full_name [get_property \$p endpoint]]"
 }
 puts "### LATCHES [llength \$d]"
+puts "### PORTS"
+foreach port [get_ports *] {
+  set name [get_full_name \$port]
+  puts "\$name [get_property \$port direction] [[get_nets \$name] capacitance [sta::cmd_corner] max]"
+}
 EOF
 
 echo "### the nine corners ..."
@@ -161,13 +166,17 @@ print(f"STA {'FAIL' if errors else 'PASS'} run={run} corners=9 latches={latches}
       f"fanout={worst(3)} userclk_skew_ns={worst(4):.2f} framestrobe_ns={worst(6):.2f} period_ns={period:g}")
 sys.exit(1 if errors else 0)
 EOF
+# The macro's liberty for the flow that places it (flow/librelane/scripts/efpga_block.sh).
+python3 util/mosaic_gen/efpga_timing.py lib "$OUT" "$RUN/macro/fabric/final_views/lef/eFPGA.lef" "$OUT/lib"
 
 [ $# -gt 1 ] || exit 0
 shift
-# The wrapper is not laid out yet, so its side of the window is an estimate from
-# the fabric's own dffq_1 and an and2, with its flops on the clock at UserCLK:
-# launch at most these ns after the edge, and capture this long before it. A
-# launch at the edge bounds hold from below, which also covers the clock gate.
+# The wrapper's side of the window. Laid out, it is measured from the layout at
+# each corner (EFPGA_STA_WINDOW, flow/librelane/scripts/efpga_block_sta.sh). If
+# not, it is an estimate from the fabric's own dffq_1 and an and2, with its flops
+# on the clock at UserCLK: launch at most these ns after the edge, and capture
+# this long before it. A launch at the edge bounds hold from below, which also
+# covers the clock gate. All of them are ns from the UserCLK pin of the macro.
 # With a divided clock the wrapper's edge is one period after the fabric's pulse.
 cat > "$OUT/design.tcl" <<EOF
 source $OUT/load.tcl
@@ -177,6 +186,12 @@ set_propagated_clock [get_clocks UserCLK]
 set offset [expr {$DIV > 1 ? $PERIOD : 0}]
 set launch [dict get {tt_025C_5v00 1.2 ss_125C_4v50 2.0 ff_n40C_5v50 0.8} \$::env(LIBC)]
 set capture [dict get {tt_025C_5v00 0.5 ss_125C_4v50 1.0 ff_n40C_5v50 0.3} \$::env(LIBC)]
+set launch_min 0
+set capture_min 0
+if {[info exists ::env(EFPGA_STA_WINDOW)]} {
+  source \$::env(EFPGA_STA_WINDOW)/window_\$::env(RC)_\$::env(LIBC).tcl
+  set_input_transition \$clk_slew [get_ports UserCLK]
+}
 set flops [all_registers -edge_triggered -clock_pins]
 set dat {}
 foreach f \$used { lappend dat [get_pins \$f/D] }
@@ -193,12 +208,14 @@ proc group {name args} {
 group reg2reg -from \$flops -to \$dat
 if {[llength \$in]} {
   set_input_delay -clock UserCLK -max [expr {\$offset + \$launch}] \$in
-  set_input_delay -clock UserCLK -min \$offset \$in
+  set_input_delay -clock UserCLK -min [expr {\$offset + \$launch_min}] \$in
+  if {[info exists in_slew]} { set_input_transition \$in_slew \$in }
   group in2reg -from \$in -to \$dat
 }
 if {[llength \$out]} {
   set_output_delay -clock UserCLK -max \$capture \$out
-  set_output_delay -clock UserCLK -min 0 \$out
+  set_output_delay -clock UserCLK -min \$capture_min \$out
+  if {[info exists load]} { set_load \$load \$out }
   group reg2out -from \$flops -to \$out
 }
 if {[llength \$in] && [llength \$out]} { group in2out -from \$in -to \$out }

@@ -80,7 +80,7 @@ For sky130, none of the eight is satisfied.
 | Physical flow | No step is skipped and a missing metric is not read as clean. | `flow/librelane/experimental/run_signoff.sh`; `harness/evidence/` and its tests |
 | Reproducibility | The simulation and physical toolchains are pinned to the same nix-eda and nixpkgs revisions. | `flake.nix`; `test_toolchain_pin.py`; `./mosaic doctor` |
 | Agent tooling | Tools reach the flows only through typed, gated calls. | `harness/gates.py`; `test_mcp_plugin_mode.py`, `test_agent_runtime.py` |
-| Python suite | 1909 passed, 94 skipped. | `make test` |
+| Python suite | 1913 passed, 94 skipped. | `make test` |
 
 The sweep steps are defined in the repository; their results depend on running
 them with the pinned toolchain ([verification.md](verification.md)).
@@ -175,10 +175,16 @@ eFPGA ([efpga.md](efpga.md)):
   93 % utilisation, and the daisy-chained `UserCLK` has up to 17.0 ns of skew.
   With each design's configuration applied, the three bench designs meet setup
   and hold at the nine corners with the fabric's clock at one cycle in four, the
-  wrapper's reset value; on every SoC clock edge `bus_regs` fails hold. That
-  rests on an estimate of the wrapper's side, which is not laid out, and another
-  design has to be checked: the command from a user's Verilog does not yet do
-  so. The command
+  wrapper's reset value; on every SoC clock edge `bus_regs` fails hold. The
+  wrapper and that macro hardened as one block in MOSAIC's flow (sweep step
+  `efpga_block`, run only when named; 2026-11-02), the first macro placed there,
+  are 0 in DRC, LVS, XOR and antenna, with setup +14.27 ns and hold +0.53 ns. The
+  PPA gate rejects that run on 53 disconnected pins, all address bits the wrapper
+  does not read, and no waiver is recorded. With the wrapper's side measured on
+  that layout the three designs still pass at one cycle in four, `task_count` by
+  30 ns with no N to spare at ss, and they work through the block's ports on its
+  netlist. Another design has to be checked: the command from a user's Verilog
+  does not yet do so. The command
   from a user's Verilog to a simulation shows that the design works only as far as the user's own
   check (`EFPGA_TEST`) tests it.
 - **`clear` is unsafe on a design that has run.** It zeroes every latch at

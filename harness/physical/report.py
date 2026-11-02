@@ -59,8 +59,9 @@ POWER: Tuple[str, ...] = (
 )
 
 # Physical-only cells scale with the die rather than the design, so the logic
-# figure the area model calibrates on excludes them.
-_FILLER = {"fill_cell", "tap_cell", "endcap_cell", "antenna_cell"}
+# figure the area model calibrates on excludes them. A hard macro does not come
+# out of synthesis at all.
+_NOT_LOGIC = {"fill_cell", "tap_cell", "endcap_cell", "antenna_cell", "macro"}
 _CLASS = "design__instance__area__class:"
 
 
@@ -71,7 +72,7 @@ def logic_area_um2(metrics: Dict[str, Any]) -> Optional[float]:
     for key, value in metrics.items():
         if not key.startswith(_CLASS):
             continue
-        if key[len(_CLASS):] in _FILLER:
+        if key[len(_CLASS):] in _NOT_LOGIC:
             continue
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             total += float(value)

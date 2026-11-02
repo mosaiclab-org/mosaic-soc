@@ -28,10 +28,14 @@ the wrapper's own loader can check what this assumes (tb/efpga/run_wrapper.sh).
 
 ``verdict`` reads the nine logs of each design that efpga_sta.sh leaves.
 
+``lib`` writes the macro's liberty for the flow that places it, one per process
+corner, from the port capacitances in efpga_sta.sh's logs: pins and no arcs.
+
 Usage: efpga_timing.py tcl <run> <design> <liberty> <out.tcl>
        efpga_timing.py latches <run> <out.vh> <hierarchical path of the fabric>
        efpga_timing.py bits <run> <design>
        efpga_timing.py verdict <dir of the logs> <period ns> <cycles per fabric clock> <design> ...
+       efpga_timing.py lib <dir of the logs> <macro.lef> <out dir>
 """
 
 import collections
@@ -470,10 +474,106 @@ def verdict(out, period, div, designs):
     return good
 
 
+# The limit the library declares on an input pin, per corner (signoff_template.yaml).
+MAX_TRANSITION = {"tt_025C_5v00": 4.0, "ss_125C_4v50": 7.0, "ff_n40C_5v50": 2.6}
+
+
+def macro_lib(log, corner, area, window=False):
+    """The macro's liberty: pins, their capacitance, UserCLK a clock pin, no arcs.
+
+    Which paths the fabric has depends on its configuration, so no arc holds for
+    the macro alone. The flow needs this to size what drives the macro; the paths
+    through it are timed per design, on the layout, by efpga_sta.sh.
+
+    With window, the pins of the wrapper's window also have arcs of no delay to
+    UserCLK, so that the slacks of the top level are the wrapper's side of the
+    window (efpga_block_sta.sh). Never for the flow: they would be checks that
+    the wrapper keeps off with its clock's division, which it knows nothing of.
+    """
+    temp, volts, tenths = re.fullmatch(r"\w\w_(n?\d+)C_(\d)v(\d\d)", corner).groups()
+    temp, volts = temp.replace("n", "-"), f"{volts}.{tenths}"
+    limit = MAX_TRANSITION[corner]
+
+    def arcs(name):
+        checks = "rise_constraint(scalar) { values(\"0\"); } fall_constraint(scalar) { values(\"0\"); }"
+        launch = ("cell_rise(scalar) { values(\"0\"); } rise_transition(scalar) { values(\"0\"); } "
+                  "cell_fall(scalar) { values(\"0\"); } fall_transition(scalar) { values(\"0\"); }")
+        if window and "RAM2FAB_D" in name:
+            return "".join(f"timing() {{ related_pin : UserCLK ; timing_type : {kind} ; {checks} }} "
+                           for kind in ("setup_rising", "hold_rising"))
+        if window and re.search(r"FAB2RAM_[CD]", name):
+            return f"timing() {{ related_pin : UserCLK ; timing_type : rising_edge ; {launch} }} "
+        return ""
+
+    def pin(name, direction, cap):
+        clock = "clock : true ; " if name == "UserCLK" else ""
+        load = f"capacitance : {float(cap) * 1e12:.6f} ; max_transition : {limit} ; " if direction == "input" else ""
+        return f'pin({name}) {{ direction : {direction} ; {clock}{load}{arcs(name)}}}'
+
+    scalars, buses = [], collections.defaultdict(list)
+    for line in log.split("### PORTS\n")[1].splitlines():
+        name, direction, cap = (line.split() + ["", "", ""])[:3]
+        if direction not in ("input", "output"):
+            continue
+        bus = re.fullmatch(r"(\w+)\[(\d+)\]", name)
+        if bus:
+            buses[bus.group(1)].append((int(bus.group(2)), direction, cap))
+        else:
+            scalars.append(pin(name, direction, cap))
+    types, groups = [], []
+    for bus, bits in sorted(buses.items()):
+        top = max(bit for bit, _, _ in bits)
+        assert sorted(bit for bit, _, _ in bits) == list(range(top + 1)), f"{bus}: not a whole bus"
+        types.append(f"type({bus}_t) {{ base_type : array ; data_type : bit ; bit_width : {top + 1} ; "
+                     f"bit_from : {top} ; bit_to : 0 ; downto : true ; }}")
+        pins = "\n".join(f"      {pin(f'{bus}[{bit}]', direction, cap)}" for bit, direction, cap in sorted(bits))
+        groups.append(f"    bus({bus}) {{ bus_type : {bus}_t ; direction : {bits[0][1]} ;\n{pins}\n    }}")
+    assert scalars or groups, "no ports in the log"
+    newline = "\n"
+    return f"""library(eFPGA__{corner}) {{
+  delay_model : table_lookup ;
+  time_unit : 1ns ;
+  voltage_unit : 1V ;
+  current_unit : 1mA ;
+  capacitive_load_unit(1, pf);
+  pulling_resistance_unit : 1ohm ;
+  leakage_power_unit : 1uW ;
+  input_threshold_pct_fall : 50 ;
+  input_threshold_pct_rise : 50 ;
+  output_threshold_pct_fall : 50 ;
+  output_threshold_pct_rise : 50 ;
+  slew_lower_threshold_pct_fall : 30 ;
+  slew_lower_threshold_pct_rise : 30 ;
+  slew_upper_threshold_pct_fall : 70 ;
+  slew_upper_threshold_pct_rise : 70 ;
+  nom_process : 1 ;
+  nom_temperature : {temp} ;
+  nom_voltage : {volts} ;
+  operating_conditions({corner}) {{ process : 1 ; temperature : {temp} ; voltage : {volts} ; }}
+  default_operating_conditions : {corner} ;
+  {(newline + "  ").join(types)}
+  cell(eFPGA) {{
+    area : {area:.2f} ;
+    {(newline + "    ").join(scalars)}
+{newline.join(groups)}
+  }}
+}}
+"""
+
+
 def main(argv):
     command, *args = argv
     if command == "verdict":
         sys.exit(0 if verdict(args[0], float(args[1]), int(args[2]), args[3:]) else 1)
+    if command == "lib":
+        width, height = re.search(r"SIZE ([\d.]+) BY ([\d.]+)", Path(args[1]).read_text()).groups()
+        Path(args[2]).mkdir(parents=True, exist_ok=True)
+        for corner in MAX_TRANSITION:
+            log = (Path(args[0]) / f"max_{corner}.log").read_text()
+            area = float(width) * float(height)
+            (Path(args[2]) / f"eFPGA__{corner}.lib").write_text(macro_lib(log, corner, area))
+            (Path(args[2]) / f"eFPGA__{corner}.window.lib").write_text(macro_lib(log, corner, area, window=True))
+        return
     run = Run(args[0])
     if command == "tcl":
         lines, summary = run.tcl(args[1], args[2])

@@ -96,7 +96,12 @@ def screen_model(harts: int, target_utilisation: float,
 
 
 def logic_area_band(synth_um2: float) -> Tuple[float, float]:
-    """Where the final logic area will land, from the synthesised area."""
+    """Where the final logic area will land, from the synthesised area.
+
+    Measured on designs of standard cells. The block around a hard macro
+    (`efpga_block`) landed at 1.69 times its synthesis, nearly all of the excess
+    in repair and clock buffers, so this says nothing about such a design.
+    """
     lo, hi = SYNTH_TO_LOGIC
     return synth_um2 * lo, synth_um2 * hi
 

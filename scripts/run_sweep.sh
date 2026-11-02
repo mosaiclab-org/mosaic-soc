@@ -72,6 +72,7 @@ STEPS=(
   "efpga_task|^### RESULT: EXIT SUCCESS.* with task_count.v in its eFPGA, checked by task_count_test.c, warm reboots: 0 |MOSAIC_CFG=configs/mosaic_efpga_demo.yaml EFPGA_DESIGN=tb/efpga/task_count.v EFPGA_TEST=tb/efpga/task_count_test.c tb/mosaic_soc/run_fw.sh"
   "efpga_synth|^SYNTH PASS preset=small |flow/librelane/scripts/efpga_synth.sh small"
   "efpga_netlist|^TB PASS netlist=small |tb/efpga/run_netlist.sh"
+  "efpga_block|^TB PASS block=mosaic_efpga |flow/librelane/scripts/efpga_block.sh build/efpga_netlist/fabric && flow/librelane/scripts/efpga_block_sta.sh build/efpga_netlist/fabric flow/librelane/experimental/final_efpga_block counter8_en bus_regs task_count && tb/efpga/run_block.sh build/efpga_netlist/fabric flow/librelane/experimental/final_efpga_block"
 
   "wake_obi|$EXIT_OK|tb/mosaic_soc/run.sh"
   "wake_log|$EXIT_OK|MOSAIC_CFG=configs/mosaic_wake_demo_log.yaml tb/mosaic_soc/run.sh"
@@ -99,7 +100,9 @@ STEPS=(
 # Steps too long for every sweep (a regex of whole names): they run only when
 # --only matches the whole name, not a part of it. efpga_netlist hardens the
 # fabric of small for GF180MCU and simulates its netlist, about 3.5 hours.
-OPT_IN="efpga_netlist"
+# efpga_block, after it, hardens the wrapper with that macro as one block, times
+# each design on it and simulates its netlist, about 1 hour.
+OPT_IN="efpga_netlist|efpga_block"
 opt_in() { printf '%s' "$1" | grep -qxE "$OPT_IN" && ! printf '%s' "$1" | grep -qxE "${ONLY:-^$}"; }
 
 if [ "$LIST_ONLY" = 1 ]; then

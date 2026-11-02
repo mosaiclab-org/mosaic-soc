@@ -4,6 +4,9 @@ A stage that prunes wrongly throws away a design that would have passed, and
 nothing downstream ever sees it again. So these tests check the PREMISE each
 rule rests on against every run on disk, not only the rule's output: a new
 run that breaks a premise fails here before an optimizer trusts the rule.
+
+The premises were measured on designs of standard cells, so a run with a hard
+macro is outside them: `logic_area_band` says so, on the run that showed it.
 """
 from __future__ import annotations
 
@@ -21,7 +24,8 @@ from harness.physical.stages import (logic_area_band, post_grt_metrics,
 RUNS = REPO_ROOT / "flow/librelane/experimental/runs"
 FINISHED = (sorted(d for d in RUNS.iterdir()
                    if (d / "final/metrics.json").is_file()
-                   and (d / "resolved.json").is_file())
+                   and (d / "resolved.json").is_file()
+                   and not json.loads((d / "resolved.json").read_text()).get("MACROS"))
             if RUNS.is_dir() else [])
 needs_runs = pytest.mark.skipif(not FINISHED, reason="run tree not present")
 

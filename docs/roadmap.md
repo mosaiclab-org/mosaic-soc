@@ -71,9 +71,12 @@ and the TDU parks it when it does not. What follows does not exist.
   meets the library's limits at nine corners (2026-10-31). Each bench design,
   timed with its configuration applied, meets setup and hold at nine corners
   with the fabric's clock at one cycle in four, so the 17 ns of `UserCLK` skew
-  needs no clock tree for `small` (2026-10-31). Left: the wrapper and the macro
-  hardened as one block, the first macro placed here, then the SoC with the
-  macro. A signoff-clean design that contains a fabric.
+  needs no clock tree for `small` (2026-10-31). The wrapper and the macro
+  hardened as one block, the first macro placed here (2026-11-02; opt-in sweep step
+  `efpga_block`), are clean in DRC, LVS and antenna and meet timing, the wrapper's
+  side of each design measured on that layout; the PPA gate rejects the block alone
+  on 53 address bits the wrapper does not read. Left: the SoC with the macro. A
+  signoff-clean design that contains a fabric.
 
 Open: which presets are offered, and the technology, GF180MCU or another.
 

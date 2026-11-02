@@ -25,16 +25,19 @@ tasks through the TDU. The configuration key `soc.efpga` puts it in the SoC:
 | The firmware and the runner of the SoC test | `tb/mosaic_soc/prog_efpga/`, `tb/mosaic_soc/run_efpga.sh` |
 | The synthesis for GF180MCU | `flow/librelane/scripts/efpga_synth.sh`, `gf180_latch_map.v` |
 | The hardening for GF180MCU: every tile type of `small` and the stitched fabric macro, whose netlist the two benches simulate, and its static timing | `efpga_gen.py --harden` and `--stitch`, `nix develop .#fabric`; `EFPGA_NETLIST` of `tb/efpga/run.sh` and `run_wrapper.sh`; `tb/efpga/run_netlist.sh`; `flow/librelane/scripts/efpga_sta.sh` |
-| The regression steps | `efpga_fabric`, `efpga_wrapper`, `efpga_powerup`, `efpga_soc`, `efpga_design`, `efpga_log`, `efpga_floonoc`, `efpga_serv`, `efpga_medium`, `efpga_task`, `efpga_synth`, and `efpga_netlist`, run only when named, in `scripts/run_sweep.sh` |
+| The wrapper and the macro hardened as one block, its timing and its bench | `flow/librelane/scripts/efpga_block.sh`, `efpga_block_sta.sh`; `tb/efpga/run_block.sh`, `tb_efpga_block.sv` |
+| The regression steps | `efpga_fabric`, `efpga_wrapper`, `efpga_powerup`, `efpga_soc`, `efpga_design`, `efpga_log`, `efpga_floonoc`, `efpga_serv`, `efpga_medium`, `efpga_task`, `efpga_synth`, and `efpga_netlist` and `efpga_block`, run only when named, in `scripts/run_sweep.sh` |
 
 What does not exist: a layout of a SoC with the fabric. The wake
 demonstration with the fabric has been simulated on each of the three buses,
 the wrapper and the fabric of `small` have been synthesised for GF180MCU
-([Synthesis](#synthesis)), and the fabric of `small` has been hardened alone,
-as a macro clean in DRC, LVS and antenna whose netlist passes the benches of
-the fabric and of the wrapper. It meets the library's slew and capacitance
-limits at nine corners; a design's own paths are not timed
-([Hardening](#hardening-for-gf180mcu)). A design is replaced through its unload stream; `clear` does not
+([Synthesis](#synthesis)), and the fabric of `small` has been hardened, as a
+macro clean in DRC, LVS and antenna whose netlist passes the benches of the
+fabric and of the wrapper. It meets the library's slew and capacitance limits at
+nine corners ([Hardening](#hardening-for-gf180mcu)). With the wrapper it has been
+hardened as one block in MOSAIC's flow, clean but for 53 address bits the wrapper
+does not read, on whose layout the three bench designs meet setup and hold
+([the block](#the-wrapper-and-the-macro-as-one-block)). A design is replaced through its unload stream; `clear` does not
 remove a design that has run safely, and a reset keeps it ([Limits](#limits)).
 
 ## The preset `small`
@@ -1139,7 +1142,8 @@ same nine corners, by `util/mosaic_gen/efpga_timing.py`:
   pins that cannot change the LUT's output or next state are disabled, and outputs
   that are constant are fixed: an unused LUT's output is constant, yet to OpenSTA
   it joins the routing's loops to a design's flops;
-- the wrapper is not laid out yet, so its side of the window is an estimate:
+- the wrapper's side of the window is an estimate unless the block's layout
+  gives it ([`EFPGA_STA_WINDOW`](#the-wrapper-and-the-macro-as-one-block)):
   launch at most 2.0, 1.2 or 0.8 ns after its edge (ss, tt, ff), from the fabric's
   own `dffq_1` and an `and2`, capture 1.0, 0.5 or 0.3 ns before it, and its flops
   on the clock at `UserCLK`.
@@ -1152,7 +1156,8 @@ read back as assumed; no loop lies on a used path (4 in `counter8_en` and 5 in
 worst paths at ss, 60 distinct, is one its FASM routes. Each design takes about 3
 minutes.
 
-Measured on the macro of 2026-10-31 at a 50 ns SoC clock, the worst of nine corners:
+Measured on the macro of 2026-10-31 with that estimate, at a 50 ns SoC clock, the
+worst of nine corners:
 
 | Design | Flops | Clock on every edge: hold, setup (ns) | One cycle in four: hold, setup (ns) | Least N | Shortest clock of the fabric (ns) |
 |---|---|---|---|---|---|
@@ -1185,8 +1190,6 @@ another design can fail. The one-command flow does not run this check yet.
 The sweep step `efpga_netlist` requires all three designs to pass, after a run at
 `EFPGA_STA_DIV=1` has failed hold on `bus_regs`.
 
-The SoC with the macro needs the user's approval.
-
 Getting the flow to run took six things the shell and the script now do:
 LibreLane's tools first on `PATH` (its Yosys has the Python packages its
 scripts import); LibreLane, loguru and FABulous's pure-Python modules on the
@@ -1194,6 +1197,114 @@ scripts import); LibreLane, loguru and FABulous's pure-Python modules on the
 the `klayout` wheel; a `python3` that is FABulous's interpreter, for
 LibreLane's own helper scripts; FABulous's settings built without validation,
 which would enable a PDK through ciel; and Magic DRC unconditional.
+
+### The wrapper and the macro as one block
+
+```bash
+flow/librelane/scripts/efpga_block.sh build/efpga_netlist/fabric
+flow/librelane/scripts/efpga_block_sta.sh build/efpga_netlist/fabric \
+    flow/librelane/experimental/final_efpga_block counter8_en bus_regs task_count
+nix develop .#sim --command tb/efpga/run_block.sh build/efpga_netlist/fabric \
+    flow/librelane/experimental/final_efpga_block
+```
+
+`efpga_block.sh` hardens `hw/efpga/mosaic_efpga.sv` with the stitched fabric as a
+hard macro, in MOSAIC's own flow: `signoff_template.yaml` through
+`experimental/run_signoff.sh`, LibreLane 3.0.0, no step skipped, no waiver. It is
+the first macro placed in this flow. `efpga_timing.py lib`, which `efpga_sta.sh`
+calls, gives the macro a liberty with its pins and no arcs, so the flow times the
+wrapper alone and the paths through the fabric are `efpga_block_sta.sh`'s.
+
+Four choices of the script, each answering a layout that failed on the way:
+
+- **No signal in Metal2, Metal3 or Metal4 over the macro** (`ROUTING_OBSTRUCTIONS`,
+  2 µm in from its edge), Metal5 open. The gaps the macro's LEF leaves between its
+  pins and power stripes count as tracks for the global router, and detailed routing
+  then shorts the wires it sent through them to the macro. Without this, one net
+  failed routing, Magic, KLayout and LVS at once; with only Metal4 and Metal5 closed,
+  routing stopped at 787 violations after 64 iterations and 7.7 hours.
+- **A west channel of 200 µm.** The loader's wires run its whole height, 2.4 times
+  the wire of the east channel. At 100 µm it stayed at 658 violations after nine
+  iterations. South is 150 µm, east 100 µm, north 40 µm.
+- **Density 50 %, not the template's 76 %.** The cells take about a third of the
+  channels, and at 76 % they crowd the window's pins so that placement cannot
+  legalise the buffers of the repair after global routing (`DPL-0036`).
+- **`RUN_POST_GRT_RESIZER_TIMING`, with 0.6 ns of hold margin.** TritonCTS balances
+  its tree by sink count and does not know the macro: a leaf with six sinks east of
+  it and one west crosses it on Metal5. A repair before routing cannot see that wire
+  (at 0.3 ns of margin in placement: 113 buffers and hold of −0.228 ns). After
+  global routing at 0.2 ns hold was −0.065 ns, at 0.4 ns −0.057 ns on another flop
+  (the repair counted it as met), at 0.6 ns it passes.
+
+Measured on 2026-11-02, on the macro of `efpga_netlist` (run `efpga_block`, 34
+minutes): routing DRC, Magic DRC, KLayout DRC, LVS, XOR and antenna all 0, routing
+reaching 0 in 11 iterations; no slew or capacitance violation; setup +14.27 ns at
+`max_ss`, hold +0.53 ns at `min_ff`, at a 50 ns clock. The die is 1,523 x 1,974 µm
+(3.01 mm², 2.18 of them the macro), with 237,534 µm² of standard cells, 33 % of what
+the macro leaves, among them 696 hold buffers. Those and the clock tree take the
+wrapper's logic to 1.69 times its synthesised area, against 1.09 to 1.18 on Blocks A
+to C, so the area screen of `harness/physical/stages.py` says nothing about a block
+like this.
+
+**`mosaic physical-intent ppa` rejects this run** (`signoff-hard-checks`), on one
+check: `design__disconnected_pin__count` is 53, and its setup, hold, slew and
+capacitance gates pass. The 53 are the address bits the wrapper does not read, ports
+with no load: `addr[1:0]` and `addr[31:10]` of `obi_req_i`, and `addr[1:0]` and
+`addr[31:5]` of `reg_req_i`. `BLOCK PASS` requires exactly those names, since
+LibreLane's count of critical pins would not notice a data bit left unconnected. No
+waiver is recorded: as with Blocks B and C, `mosaic_efpga` is not a design being
+qualified, and these ports are not ports of a SoC that holds it. Its five fan-out
+violations (four `Config_accessC` outputs of the east edge with 16 loads and one gate
+with 12, against the template's 10; no gate judges them) stand the same way.
+
+`efpga_block_sta.sh` then measures what the flow cannot see, at the nine corners, on
+the block's netlist and extraction:
+
+- slew, capacitance and fan-out with the macro's real cells in place of its liberty:
+  0 violations;
+- the configuration write, the wrapper's latest strobe on top of the latest inside
+  the macro: 16.0 ns to spare in 50 ns, at worst;
+- the wrapper's side of the window, in ns from the macro's `UserCLK` pin, which
+  `efpga_sta.sh` then uses in place of its estimates (`EFPGA_STA_WINDOW`), the worst
+  port at each corner for every port.
+
+| Worst of the three wire models (ns) | ss | tt | ff |
+|---|---|---|---|
+| Latest launch, estimated | 2.0 | 1.2 | 0.8 |
+| Latest launch, measured | 19.40 | 10.94 | 7.14 |
+| Earliest launch, measured | 2.23 | 1.15 | 0.69 |
+| Capture before the edge, estimated | 1.0 | 0.5 | 0.3 |
+| Capture before the edge, measured | 1.58 | 0.91 | 0.61 |
+
+The estimate of the launch was one flop and an `and2`. The worst path measured runs
+from a wrapper flop through 15 buffers and four gates to the window. Each design that uses the window pays that in setup, and all three still pass at the
+wrapper's reset value of one cycle in four:
+
+| Design | Hold (ns) | Setup at N = 4 (ns) | Least N | Shortest clock of the fabric (ns) |
+|---|---|---|---|---|
+| `counter8_en` | +4.76 | +139.10 | 2 | 60.9 |
+| `bus_regs` | +4.63 | +57.97 (+76.30 estimated) | 3 | 142.0 (123.7 estimated) |
+| `task_count` | +4.45 | +30.06 (+47.29 estimated) | 4 | 169.9 (152.7 estimated) |
+
+`task_count` has no N to spare at ss: its least N is the reset value.
+
+`tb/efpga/run_block.sh` simulates the block's netlist around the fabric's netlist, in
+Verilator with no delays (`tb_efpga_block.sv`), through its ports only, since nothing
+of the wrapper keeps its name after synthesis. Each design is loaded by the wrapper's
+own loader on the netlist, its 6,696 latches must read back as its timing assumes,
+and it must work: `bus_regs` on each data line through the window, `counter8_en` on
+the pads against its RTL, `task_count` as a worker slot. Three controls must fail: a
+stream of another design passed off as `bus_regs`, and one wire held low between two
+tiles, a `FrameData` and a `FrameStrobe`, which must show in the latches. It passes
+in about 9 minutes.
+
+The sweep step `efpga_block` runs the three after `efpga_netlist`, whose macro it
+reads, and runs only when named (`scripts/run_sweep.sh --only efpga_block`): on
+2026-11-02 it passed in 58 minutes (3,481 s). The verdict of `efpga_block.sh` was
+made stricter after that run, to the exact names above, and that check was run on
+that run's record, not in a new layout.
+
+The SoC with the macro needs the user's approval.
 
 ## Tools
 
@@ -1274,8 +1385,19 @@ which would enable a PDK through ciel; and Magic DRC unconditional.
   enable of those it does not use, as `counter8_en` does.
 - **What the wrapper is not.** It has one OBI slave port, a slave of the
   system crossbar like the SoC's other slaves. It cannot master the bus and
-  raises no interrupt. It has been synthesised, not laid out: its area and
-  timing are those of the cells before placement ([Synthesis](#synthesis)).
+  raises no interrupt. It has been laid out only with the fabric of `small`, as
+  one block, not in a SoC
+  ([the block](#the-wrapper-and-the-macro-as-one-block)).
+- **What the block leaves open.** The clock tree still does not know the macro: 17
+  of its 224 nets are over 1 mm, the longest 3.46 mm, and 10 of the 26 nets that
+  cross the macro on Metal5 are clock nets. The hold margin protects against that,
+  at 696 buffers, and does not remove it, so another design or floorplan has to
+  be measured again. Those 26 nets run above the macro's Metal4, and no timing here
+  counts their coupling onto its wires, since the tiles were extracted alone. The
+  flow's power of 58 mW has no switching of the fabric in it, and its 4.2 ns of
+  hold skew at ss is between the wrapper's flops and the clock gate early in the
+  tree. The die is not minimised. The netlist bench has no delays. `medium` has no
+  layout.
 - **What the worker slot is not.** A task is 16 bits in and 32 bits out: the
   fabric reads no memory and writes none, so a task's data goes through the
   user window or the pads, not through the descriptor. The slot holds one task
@@ -1353,9 +1475,9 @@ which would enable a PDK through ciel; and Magic DRC unconditional.
   flows analyse no timing of the hardened tiles and macro. `efpga_sta.sh`
   finds the repaired macro of `small` within the library's limits at every
   corner, and the three bench designs meet setup and hold at every corner with
-  the fabric's clock at one cycle in four. That rests on an estimate of the
-  wrapper's side of the window, since it is not laid out, and holds for those
-  three placements: another design has to be checked
+  the fabric's clock at one cycle in four, with the wrapper's side of the window
+  measured on the [block's layout](#the-wrapper-and-the-macro-as-one-block). That
+  holds for those three placements: another design has to be checked
   ([Timing of a design](#timing-of-a-design)).
 - **A tool combination FABulous does not test.** FABulous 2.2.0's own
   environment pins other Yosys and nextpnr revisions. The evidence that 2.2.0

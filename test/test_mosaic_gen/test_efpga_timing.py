@@ -5,7 +5,8 @@
 efpga_timing.py decides which latch holds which bit, which LUT pins cannot
 matter, and when a design passes. A wrong answer in any of these makes the
 timing of a design pass or fail for the wrong reason, and OpenSTA would not
-say so. The check on the real fabric is the sweep step `efpga_netlist`.
+say so. The checks on the real fabric are the sweep steps `efpga_netlist` and
+`efpga_block`.
 """
 
 import sys
@@ -26,6 +27,43 @@ cell("gf180mcu_fd_sc_mcu7t5v0__xnor2_1") { pin(ZN) { function : "(!(A1^A2))" ; }
 """
 FUNCS = efpga_timing.liberty_functions(LIB)
 A = "Inst_LA_LUT4c_frame_config_dffesr."
+
+
+def test_macro_lib_has_pins_and_no_arcs():
+    log = (
+        "### LATCHES 8\n### PORTS\n"
+        "UserCLK input 2.0e-13\nFrameData[1] input 3.0e-14\nFrameData[0] input 1.0e-14\n"
+        "Tile_A_I output 1.0e-15\nWarning: not a port\n"
+    )
+    text = efpga_timing.macro_lib(log, "ff_n40C_5v50", 100.0)
+    assert "library(eFPGA__ff_n40C_5v50)" in text
+    assert "temperature : -40 ; voltage : 5.50 ;" in text
+    assert "pin(UserCLK) { direction : input ; clock : true ; capacitance : 0.200000 ; max_transition : 2.6 ;" in text
+    assert "bit_width : 2 ; bit_from : 1 ; bit_to : 0 ;" in text
+    assert "pin(FrameData[0]) { direction : input ; capacitance : 0.010000 ;" in text
+    # An output has no capacitance of its own to show, and nothing here has an arc.
+    assert "pin(Tile_A_I) { direction : output ; }" in text
+    assert "timing" not in text.replace("timing_type", "") and "related_pin" not in text
+    assert "Warning" not in text
+
+
+def test_macro_lib_window_has_arcs_only_at_the_window():
+    log = (
+        "### PORTS\nUserCLK input 2.0e-13\nTile_X3Y1_RAM2FAB_D0_I0 input 1.0e-14\nTile_X3Y1_FAB2RAM_C_O0 output 0\n"
+        "Tile_X3Y1_FAB2RAM_A0_O0 output 0\nTile_X0Y1_A_O_top input 1.0e-14\n"
+    )
+    assert "timing()" not in efpga_timing.macro_lib(log, "tt_025C_5v00", 1.0)
+    pins = {line.split(")")[0].strip().removeprefix("pin("): line
+            for line in efpga_timing.macro_lib(log, "tt_025C_5v00", 1.0, window=True).splitlines() if "pin(" in line}
+    assert "setup_rising" in pins["Tile_X3Y1_RAM2FAB_D0_I0"] and "hold_rising" in pins["Tile_X3Y1_RAM2FAB_D0_I0"]
+    assert "timing_type : rising_edge" in pins["Tile_X3Y1_FAB2RAM_C_O0"]
+    for other in ("UserCLK", "Tile_X3Y1_FAB2RAM_A0_O0", "Tile_X0Y1_A_O_top"):
+        assert "timing()" not in pins[other]
+
+
+def test_macro_lib_refuses_a_bus_with_a_gap():
+    with pytest.raises(AssertionError, match="not a whole bus"):
+        efpga_timing.macro_lib("### PORTS\nFrameData[2] input 1e-15\n", "tt_025C_5v00", 1.0)
 
 
 def cell(kind, name, **pins):
