@@ -13,6 +13,7 @@
 #define MOSAIC_DEPLOY_COPY 0u   // copy to SRAM and check the CRC32
 #define MOSAIC_DEPLOY_EFPGA 1u  // a stream for the eFPGA's BITSTREAM register
 #define MOSAIC_DEPLOY_EFPGA_UNLOAD 2u  // its unload, for a design a reset kept
+#define MOSAIC_DEPLOY_EFPGA_CLKDIV 3u  // one word for CLKDIV: the design's clock
 
 typedef struct {
     uint32_t magic, version, header_size, entry_count;
@@ -68,6 +69,26 @@ uint32_t mosaic_cold_boot_load_workers(uint32_t *efpga_failure) {
         const uint32_t flash_offset = entries[index].flash_offset;
         const uint32_t expected_crc32 = entries[index].crc32;
 #ifdef MOSAIC_EFPGA_BASE
+        if (kind == MOSAIC_DEPLOY_EFPGA_CLKDIV) {
+            /* The fabric's clock that the design was timed at (pack_flash.py
+             * --efpga-div), written before its stream: a reset sets it back,
+             * and a write while connected is dropped. Read back, since a
+             * design must not run at a clock it was not timed at. */
+            if (destination_address != MOSAIC_EFPGA_BASE + MOSAIC_EFPGA_CLKDIV || size != 4u ||
+                (flash_offset & 3u) != 0u || flash_offset > MOSAIC_FLASH_SIZE - 4u) {
+                return 0xCB001000u | index;
+            }
+            const volatile uint8_t *word = (const volatile uint8_t *)(uintptr_t)
+                (MOSAIC_FLASH_BASE + flash_offset);
+            const uint32_t clkdiv = *(const volatile uint32_t *)word;
+            if (crc32_bytes(word, 4u) != expected_crc32 || clkdiv > 15u) return 0xCB001000u | index;
+            *mosaic_efpga_reg(MOSAIC_EFPGA_CLKDIV) = clkdiv;
+            const uint32_t read = *mosaic_efpga_reg(MOSAIC_EFPGA_CLKDIV);
+            if (read != clkdiv && *efpga_failure == 0u) {
+                *efpga_failure = 0x80000000u | MOSAIC_EFPGA_CLKDIV_REFUSED | read;
+            }
+            continue;
+        }
         if (kind == MOSAIC_DEPLOY_EFPGA || kind == MOSAIC_DEPLOY_EFPGA_UNLOAD) {
             if (destination_address != MOSAIC_EFPGA_BASE || size == 0u ||
                 ((size | flash_offset) & 3u) != 0u || flash_offset >= MOSAIC_FLASH_SIZE ||

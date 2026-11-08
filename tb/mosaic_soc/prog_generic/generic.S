@@ -9,7 +9,9 @@
  * RV32E controllers and as an instruction stream on the RV64 simulation tiles.
  *
  * MOSAIC_GENERIC_EFPGA=1 (run_generic.sh EFPGA_DESIGN=<design>.v): before it wakes
- * anyone, hart 0 loads the stream of efpga_stream.inc into the eFPGA, connects it
+ * anyone, hart 0 sets the fabric's clock to MOSAIC_GENERIC_EFPGA_CLKDIV if it is
+ * defined (the N the design was timed at, less one; a read-back that differs is
+ * failure 5), loads the stream of efpga_stream.inc into the eFPGA, connects it
  * and checks the design's window word 0, a register the user reset clears, on
  * every data line each way (tb/efpga/shell_regs.v), and leaves 0xA5 in it. A
  * failed check exits with 0x40000000 | its number.
@@ -89,6 +91,14 @@ _start:
     /* The registers of sw/firmware/common/efpga.h: BITSTREAM 0x0, STATUS 0x4
      * (CONFIGURED 0x2, BUSY 0x1), CONTROL 0x8 (USER_RESET 0x2). */
     li   t0, MOSAIC_ASM_EFPGA_BASE
+#ifdef MOSAIC_GENERIC_EFPGA_CLKDIV
+    /* CLKDIV 0x18, before the stream: a write while connected is dropped. */
+    li   a1, 5
+    li   a2, MOSAIC_GENERIC_EFPGA_CLKDIV
+    sw   a2, 0x18(t0)
+    lw   a0, 0x18(t0)
+    bne  a0, a2, .Lefpga_fail
+#endif
     la   t1, efpga_stream
     la   t2, efpga_stream_end
 .Lefpga_word:

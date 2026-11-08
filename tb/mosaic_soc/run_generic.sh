@@ -5,14 +5,16 @@
 # shell of its eFPGA whose window word 0 is a register the user reset clears
 # (tb/efpga/shell_regs.v), compiled as run_fw.sh compiles it. Hart 0 loads it
 # before it wakes anyone and checks that word (prog_generic/generic.S), so it runs
-# where run_fw.sh cannot, on a design with no SRAM.
+# where run_fw.sh cannot, on a design with no SRAM. EFPGA_MACRO and EFPGA_VIEWS
+# time it first, as in run_fw.sh, and hart 0 sets the fabric's clock to the N it
+# was timed at (EFPGA_DIV, mosaic_efpga_design in tb/tools.sh).
 # VJOBS=<n>: compile jobs of the Verilator model; 0, the default, is one per core.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
-if [ -n "${EFPGA_DESIGN:-}" ]; then  # relative to the caller
-  EFPGA_DESIGN="$(realpath -e "$EFPGA_DESIGN")" || { echo "EFPGA_DESIGN: no such file"; exit 1; }
-fi
+for var in EFPGA_DESIGN EFPGA_MACRO EFPGA_VIEWS; do  # relative to the caller
+  [ -z "${!var:-}" ] || { path="$(realpath -e "${!var}")" || { echo "$var: no such file"; exit 1; }; declare "$var=$path"; }
+done
 EFPGA_DESIGN="${EFPGA_DESIGN:-}"
 cd "$REPO"
 source "$REPO/tb/tools.sh"
@@ -79,17 +81,7 @@ FW_DIR="$MOSAIC_GENERATED_ROOT/generic_fw"
 rm -rf "$FW_DIR"
 mkdir -p "$FW_DIR"
 if [ -n "$EFPGA_DESIGN" ]; then
-  echo "###       compiling $EFPGA_DESIGN for the eFPGA ..."
-  [ -f "$MOSAIC_GENERATED_ROOT/efpga/manifest.json" ] \
-      || { echo "$MOSAIC_CFG has no eFPGA (soc.efpga)"; exit 1; }
-  gen=(python3 util/mosaic_gen/efpga_gen.py --fabric "$MOSAIC_GENERATED_ROOT/efpga"
-       --out "$MOSAIC_GENERATED_ROOT/efpga_design" --shell "$EFPGA_DESIGN")
-  if command -v FABulous >/dev/null; then
-    "${gen[@]}" > "$HERE/efpga-design-generic.log" 2>&1
-  else
-    nix develop "$REPO#efpga" --option warn-dirty false --command "${gen[@]}" \
-        > "$HERE/efpga-design-generic.log" 2>&1
-  fi || { echo "eFPGA compilation failed — see $HERE/efpga-design-generic.log"; exit 1; }
+  mosaic_efpga_design "$MOSAIC_GENERATED_ROOT" "$HERE/efpga-design-generic.log" || exit 1
   sed 's/^/.word 0x/' "$MOSAIC_GENERATED_ROOT/efpga_design/bitstream/$(basename "${EFPGA_DESIGN%.*}").hex" \
       > "$FW_DIR/efpga_stream.inc"
 fi
@@ -138,6 +130,7 @@ while read -r IMAGE_ID PRIMARY TL_WINDOW PRIMARY_SHARED FIXED_HART XLEN ABI; do
       -DMOSAIC_GENERIC_FIXED_HART="$FIXED_HART" \
       -DMOSAIC_GENERIC_TESTBENCH_BOOTSTRAP="$BOOTSTRAP_DISPATCH" \
       -DMOSAIC_GENERIC_EFPGA="$([ -n "$EFPGA_DESIGN" ] && echo 1 || echo 0)" -I "$FW_DIR" \
+      ${EFPGA_DESIGN:+${EFPGA_DIV:+-DMOSAIC_GENERIC_EFPGA_CLKDIV=$((EFPGA_DIV - 1))}} \
       -I "$MOSAIC_SW/include" -c "$HERE/prog_generic/generic.S" \
       -o "$FW_DIR/image_${IMAGE_ID}.o" || exit 1
   "$TC"-ld -T "$MOSAIC_SW/linker/image_${IMAGE_ID}.ld" \
@@ -191,7 +184,7 @@ fi
     +maxcycles=2000000 +verbose 2>&1 | tee "$HERE/sim-generic.log" | tail -30
 SIM_RC=${PIPESTATUS[0]}
 if [ "$SIM_RC" -eq 0 ] && grep -q "EXIT SUCCESS" "$HERE/sim-generic.log"; then
-  echo "### RESULT: EXIT SUCCESS — all $NUM_HARTS configured harts executed${EFPGA_DESIGN:+, $(basename "$EFPGA_DESIGN") loaded in the eFPGA and checked} ✓"
+  echo "### RESULT: EXIT SUCCESS — all $NUM_HARTS configured harts executed${EFPGA_DESIGN:+, $(basename "$EFPGA_DESIGN") loaded in the eFPGA and checked — $EFPGA_TIMING} ✓"
 else
   echo "### RESULT: simulation failed or no EXIT SUCCESS"
   exit 1

@@ -31,6 +31,11 @@
 # here) and packed into the flash image, and TITAN loads it at cold boot
 # before it wakes the workers: EXIT SUCCESS then also means the design was
 # configured. A design the loader refuses ends the run with its STATUS.
+# EFPGA_MACRO=<the --out of efpga_gen.py --stitch>, with EFPGA_DESIGN: the
+# SoC's fabric hardened, on which the design is timed before anything runs, and
+# refused if it fails; EFPGA_VIEWS=<the SoC's final views>, its layout with that
+# macro, for the wrapper's side of the window (mosaic_efpga_design in tb/tools.sh).
+# Without EFPGA_MACRO the result line says that the design was not timed.
 # EFPGA_TEST=<test>.c, with EFPGA_DESIGN: the user's check of that design, a C
 # function `uint32_t efpga_test(void)` that TITAN calls once the workers ran
 # (sw/firmware/Makefile). 0 passes; any other value ends the run with
@@ -41,9 +46,9 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
-if [ -n "${EFPGA_DESIGN:-}" ]; then  # relative to the caller
-  EFPGA_DESIGN="$(realpath -e "$EFPGA_DESIGN")" || { echo "EFPGA_DESIGN: no such file"; exit 1; }
-fi
+for var in EFPGA_DESIGN EFPGA_MACRO EFPGA_VIEWS; do  # relative to the caller
+  [ -z "${!var:-}" ] || { path="$(realpath -e "${!var}")" || { echo "$var: no such file"; exit 1; }; declare "$var=$path"; }
+done
 EFPGA_DESIGN="${EFPGA_DESIGN:-}"
 if [ -n "${EFPGA_TEST:-}" ]; then
   [ -n "$EFPGA_DESIGN" ] || { echo "EFPGA_TEST checks the design of EFPGA_DESIGN"; exit 1; }
@@ -88,23 +93,13 @@ BUILD_ROOT="$(sed -n 's/^FUSESOC_BUILD_ROOT=//p' "$HERE/fusesoc-setup.log" | tai
 
 EFPGA_STREAM=
 if [ -n "$EFPGA_DESIGN" ]; then
-  echo "###       compiling $EFPGA_DESIGN for the eFPGA ..."
-  [ -f "$MOSAIC_GENERATED_ROOT/efpga/manifest.json" ] \
-      || { echo "$MOSAIC_CFG has no eFPGA (soc.efpga)"; exit 1; }
-  gen=(python3 util/mosaic_gen/efpga_gen.py --fabric "$MOSAIC_GENERATED_ROOT/efpga"
-       --out "$MOSAIC_GENERATED_ROOT/efpga_design" --shell "$EFPGA_DESIGN")
-  if command -v FABulous >/dev/null; then
-    "${gen[@]}" > "$HERE/efpga-design.log" 2>&1
-  else
-    nix develop "$REPO#efpga" --option warn-dirty false --command "${gen[@]}" \
-        > "$HERE/efpga-design.log" 2>&1
-  fi || { echo "eFPGA compilation failed — see $HERE/efpga-design.log"; exit 1; }
+  mosaic_efpga_design "$MOSAIC_GENERATED_ROOT" "$HERE/efpga-design.log" || exit 1
   EFPGA_STREAM="$MOSAIC_GENERATED_ROOT/efpga_design/bitstream/$(basename "${EFPGA_DESIGN%.*}").hex"
 fi
 
 echo "### [2/4] building the production firmware (sw/firmware, rv32i) ..."
 make -C sw/firmware clean >/dev/null
-make -C sw/firmware RISCV_TC="$TC" EFPGA_STREAM="$EFPGA_STREAM" EFPGA_TEST="$EFPGA_TEST" \
+make -C sw/firmware RISCV_TC="$TC" EFPGA_STREAM="$EFPGA_STREAM" EFPGA_TEST="$EFPGA_TEST" EFPGA_DIV="${EFPGA_DIV:-}" \
     MOSAIC_GENERATED_ROOT="$MOSAIC_GENERATED_ROOT" > "$HERE/fw-build.log" 2>&1 \
     || { echo "firmware build failed — see $HERE/fw-build.log"; exit 1; }
 echo "    flash image: sw/firmware/build/mosaic_fw.hex"
@@ -133,7 +128,7 @@ SIM_RC=${PIPESTATUS[0]}
 REBOOTS=$(grep -c '^\[TESTBENCH\].*: warm reboot$' "$HERE/sim-fw.log")
 echo ""
 if [ "$SIM_RC" -eq 0 ] && grep -q "EXIT SUCCESS" "$HERE/sim-fw.log" && [ "$REBOOTS" -eq "$WARM_REBOOTS" ]; then
-  echo "### RESULT: EXIT SUCCESS — production firmware ran on $MOSAIC_CFG${EFPGA_DESIGN:+ with $(basename "$EFPGA_DESIGN") in its eFPGA}${EFPGA_TEST:+, checked by $(basename "$EFPGA_TEST")}, warm reboots: $REBOOTS ✓"
+  echo "### RESULT: EXIT SUCCESS — production firmware ran on $MOSAIC_CFG${EFPGA_DESIGN:+ with $(basename "$EFPGA_DESIGN") in its eFPGA}${EFPGA_TEST:+, checked by $(basename "$EFPGA_TEST")}, warm reboots: $REBOOTS${EFPGA_DESIGN:+ — $EFPGA_TIMING} ✓"
 else
   echo "### RESULT: simulation failed or no EXIT SUCCESS (see $HERE/sim-fw.log)"
   exit 1

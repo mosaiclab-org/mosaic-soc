@@ -21,6 +21,7 @@
 #define MOSAIC_EFPGA_TAG 0xCu        // R  the tag of the design in the fabric, 0: none
 #define MOSAIC_EFPGA_TASK 0x10u      // R  the descriptor of the last task the fabric took
 #define MOSAIC_EFPGA_RESULT 0x14u    // R  its task_result; MOSAIC_EFPGA_NO_ANSWER if cut
+#define MOSAIC_EFPGA_CLKDIV 0x18u    // RW the fabric's clock pulses every CLKDIV+1 cycles
 
 #define MOSAIC_EFPGA_BUSY 0x01u
 #define MOSAIC_EFPGA_CONFIGURED 0x02u
@@ -30,6 +31,9 @@
 #define MOSAIC_EFPGA_CUT 0x20u        // a task ended without task_done since cleared (W1C)
 
 #define MOSAIC_EFPGA_NO_ANSWER 0xFAB00BADu  // a request or a task the design did not answer
+// Not a STATUS: a failure at boot whose low bits are the CLKDIV the wrapper
+// kept instead of the one the deployment table asked for (cold_boot.c).
+#define MOSAIC_EFPGA_CLKDIV_REFUSED 0x00100000u
 
 // A load left a design configured; an unload, or a clear, left none.
 #define MOSAIC_EFPGA_LOADED(status) \

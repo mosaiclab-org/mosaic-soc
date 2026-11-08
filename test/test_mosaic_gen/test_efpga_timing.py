@@ -9,6 +9,7 @@ say so. The checks on the real fabric are the sweep steps `efpga_netlist` and
 `efpga_block`.
 """
 
+import hashlib
 import json
 import sys
 
@@ -210,6 +211,65 @@ cell("gf180mcu_fd_sc_mcu7t5v0__oai22_1") { pin(ZN) { function : "(((!A1)&(!A2))|
     assert ("top", "A1") in pins and ("top", "B1") in pins
 
 
+def test_a_pin_that_cannot_change_its_gate_is_dead_and_a_net_counts_once():
+    # A mux the latch sets passes one input; an xnor of a net with itself is
+    # constant, though each pin alone would change it.
+    text = cell("latq_1", "lat_s", D="FrameData[0]", E="FrameStrobe[0]", Q="s")
+    text += cell("mux2_2", "m", I0="a", I1="b", S="s", Z="y")
+    text += cell("buf_1", "copy", I="c", Z="c2")
+    text += cell("xnor2_1", "x", A1="c", A2="c2", ZN="k")
+    cells = efpga_timing.parse_cells(text)
+    assert efpga_timing.dead_pins(cells, FUNCS, {"s": 1}) == {("m", "I0"), ("x", "A1"), ("x", "A2")}
+    assert efpga_timing.dead_pins(cells, FUNCS, {"s": 0}) == {("m", "I1"), ("x", "A1"), ("x", "A2")}
+
+
+def test_a_gate_that_reaches_nothing_loses_its_arcs_back_to_what_feeds_only_it():
+    text = cell("buf_1", "b1", I="a", Z="x") + cell("buf_1", "b2", I="x", Z="y")
+    text += cell("buf_1", "b3", I="a", Z="z") + cell("dffq_1", "f", D="z", CLK="clk", Q="q")
+    cells = efpga_timing.parse_cells(text)
+    off = set()
+    loads = efpga_timing.live_loads(cells, off, set())
+    assert off == {("b1", "I"), ("b2", "I")} and loads["a"] == {"b3"}
+    off = set()
+    efpga_timing.live_loads(cells, off, {"y"})  # y leaves the tile, and is read there
+    assert off == set()
+
+
+def test_a_cell_without_some_arcs_keeps_the_others_and_no_power():
+    text = """library(lib_tt) {
+  lu_table_template(t) { variable_1 : x ; }
+  cell(gf180mcu_fd_sc_mcu7t5v0__mux2_2) {
+    pin(I0) { direction : input ; capacitance : 0.002 ; }
+    pin(I1) { direction : input ; capacitance : 0.002 ; }
+    pin(Z) {
+      function : "((I0&(!S))|(I1&S))" ;
+      internal_power() { related_pin : "I0" ; fall_power(t) { values("1"); } }
+      timing() { related_pin : "I0" ; cell_rise(t) { values("0.1"); } }
+      timing() { related_pin : "I1" ; cell_rise(t) { values("0.2"); } }
+      timing() { related_pin : "S" ; cell_rise(t) { values("0.3"); } }
+    }
+  }
+  cell(gf180mcu_fd_sc_mcu7t5v0__buf_1) { pin(Z) { function : "I" ; } }
+}
+"""
+    out = efpga_timing.arcs_liberty(text, {("mux2_2", frozenset({"I0", "S"}))}, "arcs_tt")
+    assert out.startswith("library(arcs_tt) {") and "lu_table_template(t)" in out
+    assert "cell(gf180mcu_fd_sc_mcu7t5v0__mux2_2__no_I0_S)" in out and "buf_1" not in out
+    assert out.count("timing()") == 1 and 'related_pin : "I1"' in out and "internal_power" not in out
+    assert "capacitance : 0.002" in out and out.count("{") == out.count("}")
+
+
+def test_the_top_netlist_gives_each_port_bit_of_a_tile_its_net():
+    tile = "module T (a, b, c);\n input [1:0] a;\n input b;\n output [3:2] c;\nendmodule\n"
+    top = "module eFPGA (o);\n output o;\n T Tile_X1Y2_T (.a({\\n[1] ,\n    \\n[0] }),\n    .b(o),\n    .c({p, q}));\nendmodule\n"
+    bits = {"T": efpga_timing.port_bits(tile)}
+    assert bits["T"] == {"a": ("input", ["a[1]", "a[0]"]), "b": ("input", ["b"]), "c": ("output", ["c[3]", "c[2]"])}
+    assert efpga_timing.wiring(top, bits) == {"Tile_X1Y2_T": {"a[1]": "n[1]", "a[0]": "n[0]", "b": "o",
+                                                              "c[3]": "p", "c[2]": "q"}}
+    with pytest.raises(ValueError, match="1 nets for 2 bits"):
+        efpga_timing.wiring(top.replace("{p, q}", "p"), bits)
+
+
 def test_the_fasm_gives_the_flops_and_the_window_it_routes():
     fasm = "\n".join(
         [
@@ -246,6 +306,37 @@ def test_a_design_compiled_elsewhere_is_taken_only_for_the_same_fabric(tmp_path)
     (out / "manifest.json").write_text(json.dumps({"fabric": {"manifest_sha256": "b" * 64}}))
     with pytest.raises(ValueError, match="another fabric"):
         run.design_file(f"{out}/shell_regs", "fasm")
+
+
+def test_the_fabric_of_a_bundle_is_the_hardened_one_when_its_rtl_and_tools_are(tmp_path):
+    """A SoC's bundle generates its fabric with no design in it: its manifest is not
+    the hardened fabric's, whose bench designs it lists, yet the fabric is the same."""
+
+    def fabric(name, **outputs):
+        path = tmp_path / name
+        path.mkdir()
+        manifest = {"geometry": {"rows": 4}, "tools": {"yosys": "0.62"},
+                    "outputs": {"proj/Fabric/eFPGA.v": "1" * 64, **outputs}}
+        (path / "manifest.json").write_text(json.dumps(manifest))
+        return path, hashlib.sha256((path / "manifest.json").read_bytes()).hexdigest()
+
+    hardened, digest = fabric("hardened", **{"bitstream/bus_regs.hex": "2" * 64})
+    run = object.__new__(efpga_timing.Run)
+    run.fabric, run.digest = hardened, digest
+    out = tmp_path / "out"
+    out.mkdir()
+
+    def compiled_for(path, sha):
+        (out / "manifest.json").write_text(json.dumps({"fabric": {"path": str(path), "manifest_sha256": sha}}))
+        return run.design_file(f"{out}/shell_regs", "fasm")
+
+    bundle, sha = fabric("bundle")
+    assert compiled_for(bundle, sha) == out / "bitstream" / "shell_regs.fasm"
+    other, sha = fabric("other", **{"proj/Tile/LUT4AB/LUT4AB.v": "3" * 64})
+    with pytest.raises(ValueError, match="another fabric"):
+        compiled_for(other, sha)
+    with pytest.raises(ValueError, match="another fabric"):  # regenerated since the design was compiled
+        compiled_for(bundle, "4" * 64)
 
 
 FLOP = "Tile_X1Y2_LUT4AB/_1_"
@@ -297,12 +388,6 @@ def test_a_loop_on_a_used_path_fails_and_one_elsewhere_does_not():
     off = "  Tile_X8Y8_LUT4AB/_7_/Z\n  | loop cut point\n  --------------------\n"
     assert any("loops on a used path" in e for e in efpga_timing.judge({"c": log(extra=on)}, [FLOP], 50)[0])
     assert efpga_timing.judge({"c": log(extra=off)}, [FLOP], 50)[0] == []
-
-
-def test_a_single_arc_from_a_pin_it_disabled_is_no_loop():
-    arc = f"  {FLOP}/D\n  | loop cut point\n  Tile_X1Y2_LUT4AB/_2_/Z\n  --------------------\n"
-    assert any("loops on a used path" in e for e in efpga_timing.judge({"c": log(extra=arc)}, [FLOP], 50)[0])
-    assert efpga_timing.judge({"c": log(extra=arc)}, [FLOP], 50, {f"{FLOP}/D"})[0] == []
 
 
 def test_the_verdict_names_the_division_setup_asks_for_and_fails_on_a_violation(tmp_path, capsys):

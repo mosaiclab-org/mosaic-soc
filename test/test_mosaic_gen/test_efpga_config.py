@@ -325,6 +325,36 @@ def test_the_unload_then_the_stream_are_the_last_entries_of_the_table(tmp_path):
     assert deployment["efpga_unload"]["source"] == "d.unload.hex"
 
 
+def test_the_clock_a_design_was_timed_at_comes_between_its_unload_and_its_stream(tmp_path):
+    artifacts = software_gen.generate_software_artifacts(load_mosaic_yaml(DEMO), tmp_path / "sw")
+    images = {}
+    for image in json.loads(artifacts.boot_manifest.read_text())["images"]:
+        path = tmp_path / f"image_{image['image_id']}.bin"
+        path.write_bytes(bytes([image["image_id"]]) * 8)
+        images[int(image["image_id"])] = path
+    stream, unload = _hex(tmp_path / "d.hex", [0xFAB0FAB1]), _hex(tmp_path / "d.unload.hex", [0xFAB0FAB1])
+    output = tmp_path / "flash.bin"
+    deployment = pack_flash.pack(artifacts.boot_manifest, images, output, stream, unload, 13)
+
+    raw = output.read_bytes()
+    count = pack_flash.HEADER.unpack_from(raw)[3]
+    entries = [pack_flash.ENTRY.unpack_from(raw, pack_flash.HEADER.size + k * pack_flash.ENTRY.size)
+               for k in range(count)]
+    assert [entry[0] for entry in entries[-3:]] == [
+        pack_flash.KIND_EFPGA_UNLOAD, pack_flash.KIND_EFPGA_CLKDIV, pack_flash.KIND_EFPGA]
+    kind, destination, size, offset, crc = entries[-2]
+    word = struct.pack("<I", 12)  # CLKDIV is N - 1
+    assert (destination, size, raw[offset:offset + 4]) == (0x200C_0018, 4, word)
+    assert crc == binascii.crc32(word) & 0xFFFF_FFFF
+    assert deployment["efpga_clkdiv"]["source"] == "one cycle in 13"
+    for bad in (0, 17):
+        with pytest.raises(pack_flash.PackError, match="one cycle in 1 to 16"):
+            pack_flash.pack(artifacts.boot_manifest, images, output, stream, unload, bad)
+    with pytest.raises(pack_flash.PackError, match="the design of --efpga"):
+        pack_flash.pack(artifacts.boot_manifest, images, output, None, None, 4)
+    assert pack_flash.pack(artifacts.boot_manifest, images, output, stream, unload)["efpga_clkdiv"] is None
+
+
 def test_a_stream_is_refused_without_an_efpga_its_unload_or_when_malformed(tmp_path):
     stream, unload = _hex(tmp_path / "d.hex", [0xFAB0FAB1]), _hex(tmp_path / "u.hex", [0xFAB0FAB1])
     with pytest.raises(pack_flash.PackError, match="no eFPGA"):

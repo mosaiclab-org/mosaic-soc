@@ -77,10 +77,13 @@ and the TDU parks it when it does not. What follows does not exist.
   side of each design measured on that layout; the PPA gate rejects the block alone
   on 53 address bits the wrapper does not read. Block A's SoC with the macro
   (2026-11-02; opt-in sweep step `efpga_block_soc`) is signoff-clean and accepted
-  by the PPA gate, the first such design that contains a fabric. Left: a
-  verdict from the SoC's netlist bench, the one-command flow timing each user design (decided 2026-11-02: the chip claims no
-  fixed speed for the fabric), a pad ring and a slot for the larger die, and
-  `medium`.
+  by the PPA gate, the first such design that contains a fabric. Its netlist runs a design loaded from flash (2026-11-03). Given the
+  macro, the one-command flow times each user design and refuses one that fails,
+  since the chip claims no fixed speed for the fabric (decided 2026-11-02, built
+  2026-11-07); each design runs at the least N it meets, which the firmware sets
+  before it loads it, and a design that uses much of the fabric is timed, the
+  arcs its configuration leaves dead taken out of the netlist OpenSTA reads
+  (2026-11-07). Left: a pad ring and a slot for the larger die, and `medium`.
 
 Open: which presets are offered, and the technology, GF180MCU or another.
 

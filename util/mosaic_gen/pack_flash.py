@@ -8,7 +8,9 @@ With --efpga, the last entries hold the stream of an eFPGA design (a
 <design>.hex of util/mosaic_gen/efpga_gen.py) and, with --efpga-unload, its
 unload stream: the loader writes the unload to the BITSTREAM register of the
 design's eFPGA (soc.efpga) if a reset kept a design in the fabric, then the
-stream, before it wakes the workers.
+stream, before it wakes the workers. With --efpga-div N, an entry between them
+sets the fabric's clock to one cycle in N (the CLKDIV register, N - 1): the N
+the design was timed at, which a reset puts back to 4.
 """
 
 from __future__ import annotations
@@ -31,6 +33,8 @@ ENTRY = struct.Struct("<5I")  # kind, destination, size, flash_offset, crc32
 KIND_COPY = 0  # copy to SRAM at destination and check its CRC32
 KIND_EFPGA = 1  # write the words to the BITSTREAM register at destination
 KIND_EFPGA_UNLOAD = 2  # the same, first, only if the fabric holds a design
+KIND_EFPGA_CLKDIV = 3  # one word for the CLKDIV register at destination, before the stream
+CLKDIV = 0x18  # of the eFPGA's registers (hw/efpga/mosaic_efpga.sv)
 MAX_ENTRIES = 15  # MOSAIC_DEPLOY_MAX_ENTRIES of sw/firmware/common/cold_boot.c
 
 
@@ -55,6 +59,7 @@ def pack(
     output: Path,
     efpga_stream: Path | None = None,
     efpga_unload: Path | None = None,
+    efpga_div: int | None = None,
 ) -> dict:
     manifest = json.loads(manifest_path.read_text())
     images = manifest.get("images")
@@ -109,6 +114,8 @@ def pack(
         )
 
     streams = {}  # kind -> (bytes, its deployment record)
+    if efpga_div is not None and efpga_stream is None:
+        raise PackError("--efpga-div sets the clock of the design of --efpga")
     if efpga_stream is not None or efpga_unload is not None:
         if "efpga" not in manifest:
             raise PackError("the design has no eFPGA (soc.efpga) to load a bitstream into")
@@ -116,20 +123,28 @@ def pack(
             raise PackError("--efpga and --efpga-unload go together: a reset keeps the "
                             "design in the fabric, which only its unload removes")
         destination = manifest["efpga"]["registers"]
-        for kind, path in ((KIND_EFPGA_UNLOAD, efpga_unload), (KIND_EFPGA, efpga_stream)):
-            words = [int(word, 16) for word in path.read_text().split()]
-            if not words or any(not 0 <= word < 1 << 32 for word in words):
-                raise PackError(f"{path}: not a stream of 32-bit words, one per line")
+        parts = [(KIND_EFPGA_UNLOAD, efpga_unload), (KIND_EFPGA, efpga_stream)]
+        if efpga_div is not None:
+            if not 1 <= efpga_div <= 16:
+                raise PackError(f"--efpga-div {efpga_div}: the fabric's clock is one cycle in 1 to 16")
+            parts.insert(1, (KIND_EFPGA_CLKDIV, efpga_div))
+        for kind, path in parts:
+            if kind == KIND_EFPGA_CLKDIV:
+                words, at, source = [path - 1], f"0x{int(destination, 0) + CLKDIV:08X}", f"one cycle in {path}"
+            else:
+                words, at, source = [int(word, 16) for word in path.read_text().split()], destination, path.name
+                if not words or any(not 0 <= word < 1 << 32 for word in words):
+                    raise PackError(f"{path}: not a stream of 32-bit words, one per line")
             stream = struct.pack(f"<{len(words)}I", *words)
             crc = binascii.crc32(stream) & 0xFFFF_FFFF
-            entries.append((kind, int(destination, 0), len(stream), cursor, crc))
+            entries.append((kind, int(at, 0), len(stream), cursor, crc))
             streams[kind] = stream, {
-                "destination": destination,
+                "destination": at,
                 "flash_offset": f"0x{cursor:08X}",
                 "size": len(stream),
                 "crc32": f"0x{crc:08X}",
                 "sha256": hashlib.sha256(stream).hexdigest(),
-                "source": path.name,
+                "source": source,
             }
             cursor = _align(cursor + len(stream), 0x1000)
     if len(entries) > MAX_ENTRIES:
@@ -176,6 +191,7 @@ def pack(
         "images": deployments,
         "efpga_bitstream": streams.get(KIND_EFPGA, (None, None))[1],
         "efpga_unload": streams.get(KIND_EFPGA_UNLOAD, (None, None))[1],
+        "efpga_clkdiv": streams.get(KIND_EFPGA_CLKDIV, (None, None))[1],
     }
     output.with_suffix(".json").write_text(json.dumps(deployment, indent=2, sort_keys=True) + "\n")
     return deployment
@@ -190,6 +206,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="the stream of an eFPGA design, loaded before the workers wake")
     parser.add_argument("--efpga-unload", type=Path, metavar="STREAM.unload.hex",
                         help="its unload stream, for a design a reset kept in the fabric")
+    parser.add_argument("--efpga-div", type=int, metavar="N",
+                        help="the fabric's clock for that design: one cycle in N (1 to 16)")
     args = parser.parse_args(argv)
     paths: dict[int, Path] = {}
     for value in args.image:
@@ -202,7 +220,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error(f"duplicate image ID {image_id}")
         paths[image_id] = Path(raw_path)
     try:
-        pack(args.manifest, paths, args.output, args.efpga, args.efpga_unload)
+        pack(args.manifest, paths, args.output, args.efpga, args.efpga_unload, args.efpga_div)
     except (OSError, KeyError, TypeError, ValueError, PackError) as exc:
         parser.error(str(exc))
     return 0

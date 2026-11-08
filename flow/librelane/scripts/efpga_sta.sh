@@ -26,8 +26,10 @@
 #     under EFPGA_STA_PERIOD ns (default 50, the 20 MHz of the synthesis)
 #
 # A design's own paths depend on its configuration: the switch matrices' loops
-# leave OpenSTA blind to them. Each design named after the run is timed with its
-# configuration applied (util/mosaic_gen/efpga_timing.py): setup and hold of the
+# leave OpenSTA blind to them, since it cuts loops before it applies constants.
+# Each design named after the run is timed with its configuration applied, on
+# the fabric's netlist without the arcs that configuration leaves dead
+# (util/mosaic_gen/efpga_timing.py): setup and hold of the
 # flops it uses and of the wrapper's window it routes, at the same nine corners,
 # with the wrapper's clock period EFPGA_STA_PERIOD and the fabric's clock pulsing
 # one cycle in EFPGA_STA_DIV (default 4, the reset value of hw/efpga/mosaic_efpga.sv).
@@ -73,16 +75,25 @@ for tile, views in sorted(manifest["tile_macros"].items()):
 out.write_text("\n".join(lines) + "\n")
 EOF
 
+# A design's run reads, from the directory of its DESIGN_TCL, the fabric's
+# netlist with each tile its own module and the cells of the arcs it keeps
+# (efpga_timing.py tcl): the tile of an instance is its module up to "__".
 cat > "$OUT/load.tcl" <<EOF
 read_liberty ${LIB}\$::env(LIBC).lib
 source $OUT/tiles.tcl
-foreach tile [array names nl] { read_verilog \$nl(\$tile) }
+if {[info exists ::env(DESIGN_TCL)]} {
+  read_liberty [file dirname \$::env(DESIGN_TCL)]/arcs_\$::env(LIBC).lib
+  read_verilog [file dirname \$::env(DESIGN_TCL)]/fabric.nl.v
+} else {
+  foreach tile [array names nl] { read_verilog \$nl(\$tile) }
+}
 link_design eFPGA
-foreach inst [get_cells *] { read_spef -path [get_name \$inst] \$spef([get_property \$inst ref_name]) }
+proc tile_of {cell} { regsub {__.*} [get_property \$cell ref_name] {} }
+foreach inst [get_cells *] { read_spef -path [get_name \$inst] \$spef([tile_of \$inst]) }
 foreach net [get_nets *] {
   set c 0.0
   foreach pin [get_pins -quiet -of_objects \$net] {
-    set k "\$::env(RC),[get_property [get_cells -of_objects \$pin] ref_name],[regsub {^.*/} [get_full_name \$pin] {}]"
+    set k "\$::env(RC),[tile_of [get_cells -of_objects \$pin]],[regsub {^.*/} [get_full_name \$pin] {}]"
     if {[info exists pcap(\$k)]} { set c [expr {\$c + \$pcap(\$k)}] }
   }
   if {\$c > 0} { set_load \$c \$net }

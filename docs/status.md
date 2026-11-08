@@ -80,7 +80,7 @@ For sky130, none of the eight is satisfied.
 | Physical flow | No step is skipped and a missing metric is not read as clean. | `flow/librelane/experimental/run_signoff.sh`; `harness/evidence/` and its tests |
 | Reproducibility | The simulation and physical toolchains are pinned to the same nix-eda and nixpkgs revisions. | `flake.nix`; `test_toolchain_pin.py`; `./mosaic doctor` |
 | Agent tooling | Tools reach the flows only through typed, gated calls. | `harness/gates.py`; `test_mcp_plugin_mode.py`, `test_agent_runtime.py` |
-| Python suite | 1935 passed, 94 skipped. | `make test` |
+| Python suite | 1968 passed, 93 skipped, in `nix develop .#sim`. | `make test` |
 
 The sweep steps are defined in the repository; their results depend on running
 them with the pinned toolchain ([verification.md](verification.md)).
@@ -189,9 +189,15 @@ eFPGA ([efpga.md](efpga.md)):
   pin, setup +3.05 ns and hold +0.52 ns, and the PPA gate accepts it, after the
   wrapper was given a clock buffer before the macro's `UserCLK`. Its die, 5.16 mm²,
   does not fit Block A's slot. On its layout the three designs and `shell_regs`
-  pass at one cycle in four. Its netlist bench, which takes hours, has given no
-  verdict yet. Another design has to be checked: the command from a user's Verilog
-  does not yet do so. The command
+  pass at one cycle in four. Its netlist, around the fabric's, boots from flash, loads
+  `shell_regs.v` and runs it in Verilator (3 hours 45 minutes). Given that macro
+  (`EFPGA_MACRO`), the command from a user's Verilog times the design at nine
+  corners before it runs, sets the fabric's clock to the least division it passes
+  at, and refuses one that fails: `shell_regs` runs at one cycle in 3 on Block A's
+  layout, a chain of 24 LUTs at one in 10, and `task_count` held at one in 4 at
+  32 MHz is refused on setup (sweep step `efpga_timed`, run only when named;
+  2026-11-08). A path longer than 16 cycles of the fabric cannot run: a chain of
+  40 LUTs needs all 16 at ss. The command
   from a user's Verilog to a simulation shows that the design works only as far as the user's own
   check (`EFPGA_TEST`) tests it.
 - **`clear` is unsafe on a design that has run.** It zeroes every latch at

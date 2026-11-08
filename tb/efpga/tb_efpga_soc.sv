@@ -52,6 +52,14 @@ module tb_efpga_soc;
     always #25 clk = ~clk;  // the 50 ns the block was hardened for
     always @(posedge clk) cycles <= cycles + 1;
 
+    // A run takes hours: its progress, from the pins.
+    int selects = 0;
+    always @(negedge spi_csb) selects <= selects + 1;
+    always @(posedge clk) if (cycles % 20000 == 0) begin
+        $display("progress cycles=%0d flash_selects=%0d", cycles, selects);
+        $fflush;
+    end
+
     task automatic fail(input string reason);
         $display("TB FAIL reason=%0s cycles=%0d", reason, cycles);
         $fatal(1, "TB FAIL");

@@ -19,20 +19,21 @@ tasks through the TDU. The configuration key `soc.efpga` puts it in the SoC:
 | The tool shell | `nix develop .#efpga` (`flake.nix`, `util/efpga-requirements.txt`) |
 | The wrapper: loader and unload, isolation, bus timeout, the TDU's worker slot | `hw/efpga/mosaic_efpga.sv`; the TDU's pop for it in `hw/tdu/rtl/tdu.sv` |
 | The key, and a SoC that has it | `soc.efpga` in `util/mosaic_gen/core_registry.py`; `configs/mosaic_efpga_demo.yaml` |
-| Four user designs, and the benches of the fabric and of the wrapper | `tb/efpga/` |
+| Five user designs, and the benches of the fabric and of the wrapper | `tb/efpga/` |
 | The driver, with a task through the TDU, and the load at cold boot | `sw/firmware/common/efpga.h`; `cold_boot.c` and `util/mosaic_gen/pack_flash.py --efpga` |
-| The shell, and the command from a user's Verilog to a simulation | `efpga_gen.py --shell`; `EFPGA_DESIGN=<design>.v tb/mosaic_soc/run_fw.sh` |
+| The shell, and the command from a user's Verilog to a simulation, which times the design on a hardened fabric | `efpga_gen.py --shell`; `EFPGA_DESIGN=<design>.v tb/mosaic_soc/run_fw.sh`, `EFPGA_MACRO`, `EFPGA_VIEWS`, `EFPGA_DIV`; `mosaic_efpga_design` in `tb/tools.sh` |
 | The firmware and the runner of the SoC test | `tb/mosaic_soc/prog_efpga/`, `tb/mosaic_soc/run_efpga.sh` |
 | The synthesis for GF180MCU | `flow/librelane/scripts/efpga_synth.sh`, `gf180_latch_map.v` |
 | The hardening for GF180MCU: every tile type of `small` and the stitched fabric macro, whose netlist the two benches simulate, and its static timing | `efpga_gen.py --harden` and `--stitch`, `nix develop .#fabric`; `EFPGA_NETLIST` of `tb/efpga/run.sh` and `run_wrapper.sh`; `tb/efpga/run_netlist.sh`; `flow/librelane/scripts/efpga_sta.sh` |
 | The wrapper and the macro hardened as one block, its timing and its bench | `flow/librelane/scripts/efpga_block.sh`, `efpga_block_sta.sh`; `tb/efpga/run_block.sh`, `tb_efpga_block.sv` |
 | Block A's SoC with the fabric, its RTL test, and the same hardening, timing and bench with the macro in it | `configs/mosaic_block_efpga.yaml`, `flow/librelane/experimental/mosaic_block_efpga.sv`; `EFPGA_DESIGN` of `tb/mosaic_soc/run_generic.sh`; `efpga_block.sh` with a SoC configuration, `gen_filelist.py --efpga-macro`; `tb/efpga/run_soc_block.sh`, `tb_efpga_soc.sv` |
-| The regression steps | `efpga_fabric`, `efpga_wrapper`, `efpga_powerup`, `efpga_soc`, `efpga_design`, `efpga_log`, `efpga_floonoc`, `efpga_serv`, `efpga_medium`, `efpga_task`, `efpga_blocka`, `efpga_synth`, and `efpga_netlist`, `efpga_block` and `efpga_block_soc`, run only when named, in `scripts/run_sweep.sh` |
+| The regression steps | `efpga_fabric`, `efpga_wrapper`, `efpga_powerup`, `efpga_soc`, `efpga_design`, `efpga_log`, `efpga_floonoc`, `efpga_serv`, `efpga_medium`, `efpga_task`, `efpga_blocka`, `efpga_synth`, and `efpga_netlist`, `efpga_block`, `efpga_block_soc` and `efpga_timed`, run only when named, in `scripts/run_sweep.sh` |
 
 Block A's SoC with the fabric of `small` as a macro has a layout that is clean in
 every signoff check and accepted by MOSAIC's PPA gate, on which the designs meet
-timing ([the SoC with the macro](#the-soc-with-the-macro)); it is not in silicon,
-and its die does not fit Block A's slot. The wake
+timing, and whose netlist loads a design from flash and runs it
+([the SoC with the macro](#the-soc-with-the-macro)); it is not in silicon, and its
+die does not fit Block A's slot. The wake
 demonstration with the fabric has been simulated on each of the three buses,
 the wrapper and the fabric of `small` have been synthesised for GF180MCU
 ([Synthesis](#synthesis)), and the fabric of `small` has been hardened, as a
@@ -173,7 +174,13 @@ the table is version 2: kind 0 is an image TITAN copies to SRAM and checks,
 kind 1 a stream it writes to `BITSTREAM`, kind 2 the unload it writes before
 it, only when `TAG` is not 0. That happens after a reset that kept power: the
 fabric still holds the design that ran, and the loader takes only that
-design's unload ([the wrapper](#the-wrapper)). The boot manifest of a design
+design's unload ([the wrapper](#the-wrapper)). With `--efpga-div N`
+(`EFPGA_DIV=N` of the Makefile) a kind 3 entry between the two holds one word,
+N − 1, for `CLKDIV`: the fabric's clock the design was timed at
+([the fabric's clock](#the-fabrics-clock)), which a reset sets back to 4. TITAN
+checks that word's CRC, writes it before the stream, while the fabric is not
+connected, and reads it back; if the wrapper kept another value, it loads no
+design, and the exit value is `0x8010_0000` with that value. The boot manifest of a design
 with `soc.efpga` names the register address, and the packer refuses a stream
 for a design without one, a stream without its unload, and a table longer
 than the 15 entries TITAN takes. TITAN's cold-boot code writes the streams
@@ -236,6 +243,53 @@ fabric (`+warm_reboots` of `tb/tb_top.sv`). `EXIT SUCCESS`
 means that the design synthesised, placed and routed, that the loader took its
 stream and reported `configured`, that TITAN connected it, and that the
 workers then ran.
+
+`EFPGA_MACRO=<the --out of efpga_gen.py --stitch>`, the fabric hardened, times
+the design before anything is built from it, since nextpnr places it without
+knowing the fabric's timing ([Timing of a design](#timing-of-a-design)): at the
+nine corners, at the SoC's clock (`objectives.target_clock_mhz`, else 50 ns),
+with the fabric's at one cycle in N ([the fabric's clock](#the-fabrics-clock)).
+N is `EFPGA_DIV` if given; if not, the design is timed at 2 and, when setup
+alone fails, once more at the least N it asks for (every cycle more gives each
+path one more period), up to the 16 that `CLKDIV` can hold. A design that fails
+at its N is refused with `### RESULT: refused` and its timing, and nothing is
+simulated. Otherwise the firmware sets `CLKDIV` to that N before it loads the
+design ([booting with a design](#booting-with-a-design)), the result line names
+it, and `EFPGA_TEST` is built with `MOSAIC_EFPGA_DIV` set to it. Without
+`EFPGA_MACRO`, `EFPGA_DIV` still sets the clock, untimed, and without either
+the fabric runs at the reset value, 4. `EFPGA_VIEWS=<final views>` of the SoC
+hardened with that macro gives the wrapper's side of the window as measured on
+the layout ([the block](#the-wrapper-and-the-macro-as-one-block)); without it the
+window is an estimate. The macro must be of the bundle's fabric, the same RTL,
+geometry and tools, which `efpga_timing.py` checks. Without `EFPGA_MACRO` the
+result line says that the design was not timed. `run_generic.sh` takes the same
+two variables; `mosaic_efpga_design` in `tb/tools.sh` does this for both.
+
+```bash
+EFPGA_MACRO=build/efpga_netlist/fabric EFPGA_VIEWS=flow/librelane/experimental/final_block_efpga \
+    MOSAIC_CFG=configs/mosaic_block_efpga.yaml EFPGA_DESIGN=tb/efpga/shell_regs.v \
+    nix develop .#sim --command tb/mosaic_soc/run_generic.sh
+```
+
+That is the sweep step `efpga_timed`, run only when named, since it needs the
+macro of `efpga_netlist` and the layout of `efpga_block_soc`. On 2026-11-08 it
+ran three designs in 66 minutes. `shell_regs`, on Block A's layout, failed setup
+at one cycle in 2 and passed at 3, setup +12.36 ns and hold +4.45 ns at worst,
+then was loaded from flash with `CLKDIV` set to 3 and checked.
+`tb/efpga/long_chain.v`, 24 LUTs in a chain from the bus's write data to one
+flop, on the demonstration SoC with the window estimated, asked for 10 and
+passed there, setup +0.84 ns and hold +6.39 ns; its check,
+`tb/efpga/long_chain_test.c`, finds 10 in `CLKDIV` and the chain's parity for
+seven words. The control, `task_count` on `configs/mosaic_efpga_fast.yaml`, the
+demonstration SoC at 32 MHz, held at one cycle in 4 by `EFPGA_DIV=4`, was refused
+before its firmware was built: setup −8.96 ns at ss, its fabric needing 133.96 ns
+where four cycles give 125 (`min_div` 5). Before the dead arcs were removed from
+the netlist, `long_chain` was refused for 14 loops on its path. Two things found
+on the way: at 40 MHz the macro itself fails, since its latest strobe, 24.6 ns, and the
+latch's hold do not fit in one cycle of the loader; and nextpnr refuses on its
+own a design that its generic delay model puts under 12 MHz, a model that is not
+the silicon's (a chain of 48 LUTs between two flops: 3.8 MHz), but it times no
+path from the window.
 
 `EFPGA_TEST=my_test.c` adds the check of what the design does: a C function
 `uint32_t efpga_test(void)`, compiled into TITAN's image with the driver's
@@ -506,6 +560,13 @@ What comes back is taken at E + N, the next pulse, before that pulse has reached
 any flop. So the fabric's own paths have N periods, and those through the window
 have N − 1 or N, less the latency of the clock. After connecting, the first pulse
 waits until the window has caught up.
+
+N is the design's: the one-command flow times each design and finds the least
+N it meets ([A user's design](#a-users-design)), and the firmware writes it to
+`CLKDIV` before it loads the design, from an entry of the deployment table
+([booting with a design](#booting-with-a-design)). A reset sets it back to 4, and
+a write while connected is dropped, so the boot writes it each time, before the
+stream, and reads it back.
 
 The window's handshakes need nothing more, and `BUS_TIMEOUT` counts clocks of
 the fabric. Two things are less exact than at `CLKDIV` 0, where the window moves
@@ -1141,11 +1202,35 @@ same nine corners, by `util/mosaic_gen/efpga_timing.py`:
   the ports of the window it routes. A flop it does not use still has a `D`, and
   would report violations that do nothing. The pads are not timed, since what
   drives them is outside the chip;
-- the gates of every LUT, used or not, are evaluated with the library's functions
-  under the truth table it holds, because OpenSTA judges one gate at a time. Their
-  pins that cannot change the LUT's output or next state are disabled, and outputs
-  that are constant are fixed: an unused LUT's output is constant, yet to OpenSTA
-  it joins the routing's loops to a design's flops;
+- the arcs that cannot carry a change are not in the netlist OpenSTA reads.
+  OpenSTA levelizes the graph before it applies case analysis or
+  `set_disable_timing`, and cuts each loop of the routing at an edge of its own
+  choosing: on a design that uses much of the fabric that edge falls on the
+  design's path, and part of the path disappears. So `efpga_timing.py` writes,
+  beside the design's commands, the fabric's netlist with each tile its own
+  module (`fabric.nl.v`), whose gates with dead inputs are variants of their
+  cells without those arcs (`arcs_<corner>.lib`). The connections, and so the
+  parasitics and every pin's load, are the layout's. Dead are, to a fixed point
+  over the whole fabric:
+  - a gate's input its output does not depend on once the latches are applied,
+    following each net back while it is a function of one other, so that two
+    pins carrying one signal count as one: a mux's unselected inputs, and an
+    input that reconverges and cancels;
+  - a LUT's pins that no end they reach depends on, by evaluating its mapped
+    gates with the library's functions under the truth table it holds (ABC maps
+    each LUT differently, so no structure can be assumed), as truth tables over
+    all its inputs at once. The gates behind the LUT that feed only it count as
+    part of it, and two LUTs that share their input wires (A and B, C and D, E
+    and F, G and H) are also evaluated together, since ABC decodes those once:
+    one of them may use an input the other ignores, and a pin is false where it
+    reaches only the other. A LUT's own output that the routing brings back to
+    an input it ignores is one input of the evaluation, whichever of its nets
+    carry it; otherwise the decoding cancels it unseen and the loop stays. An
+    unused LUT's constant output is fixed by case analysis;
+  - every arc of a gate that then reaches no flop and no tile output that the
+    next tile reads, the tiles' ports followed through the fabric's netlist:
+    the carry chain, through every LUT to the `Co` of each tile and into the
+    terminal tiles, is the largest of these;
 - the wrapper's side of the window is an estimate unless the block's layout
   gives it ([`EFPGA_STA_WINDOW`](#the-wrapper-and-the-macro-as-one-block)):
   launch at most 2.0, 1.2 or 0.8 ns after its edge (ss, tt, ff), from the fabric's
@@ -1160,8 +1245,27 @@ read back as assumed; no loop lies on a used path (4 in `counter8_en` and 5 in
 worst paths at ss, 60 distinct, is one its FASM routes. Each design takes about 3
 minutes.
 
+Until 2026-11-07 the dead arcs were disabled (`set_disable_timing`) rather than
+taken out, which OpenSTA's levelization does not see. With them taken out, on the
+same macro at 50 ns: `counter8_en` and `task_count` give the same numbers to the
+hundredth; `bus_regs` gives setup +95.11 ns at one cycle in four where it gave
++76.30. The loops OpenSTA finds are as before, 4, 5 and none, all in routing that
+leads nowhere (a ring of unused muxes reaches nothing, yet each of them loads the
+next, so no pass of reachability removes it), none on a used path. Its
+old worst path, `N1END0` of `X3Y3` to the window's `FAB2RAM_D0_O1`, went from LUT G
+of `X2Y3` into LUT E through E's input I1, which the routing feeds by default and
+E's truth table ignores (its FASM gives E only I0, I2 and I3): 18.8 ns of a path
+that cannot happen, which the old analysis missed because the signal reaches E's
+gates by pins on different nets. The new worst path visits only LUTs the design
+configures. A chain of 40 LUT2 from the window to a flop, which the old way
+refused for 94 loops on its path, now has none: its path at tt visits 41
+distinct LUTs once each, 672 gates, 378 ns from the window, and at ss it needs
+774 ns, one cycle in 16 at 50 ns, as many as `CLKDIV` gives. A corner takes about
+30 s instead of 95, since the levelizer has a third of the arcs left.
+
 Measured on the macro of 2026-10-31 with that estimate, at a 50 ns SoC clock, the
-worst of nine corners:
+worst of nine corners (`bus_regs`'s setup with the dead arcs disabled, not taken
+out: +95.11 at one cycle in four, 104.9 ns, since 2026-11-07):
 
 | Design | Flops | Clock on every edge: hold, setup (ns) | One cycle in four: hold, setup (ns) | Least N | Shortest clock of the fabric (ns) |
 |---|---|---|---|---|---|
@@ -1189,7 +1293,8 @@ worst of nine corners:
   which a 50 ns period still covers, and hold between its flops is untested.
 
 Each design's numbers hold for its own placement: nextpnr knows none of this, and
-another design can fail. The one-command flow does not run this check yet.
+another design can fail. So the one-command flow runs this check on each user
+design when it is given the macro (`EFPGA_MACRO`, [A user's design](#a-users-design)).
 
 The sweep step `efpga_netlist` requires all three designs to pass, after a run at
 `EFPGA_STA_DIV=1` has failed hold on `bus_regs`.
@@ -1416,17 +1521,35 @@ the flash model of the RTL bench, executing in place, the image of `run_generic.
 loads and checks `shell_regs.v`, and the exit strobe must come with value 0 and the
 fabric's pads at 0xA5. The image of `task_count.v` must fail on its exit value.
 
-**It has not given a verdict.** The RTL takes 461,000 cycles to the exit, 92 % of
-them the load (cycle 1,500 to about 425,000). The netlist model runs 52.6 cycles a
-second in the boot ROM and about 42 while executing from flash, measured over its
-first 30,000 cycles, so both images should have ended within about three hours. On
-2026-11-02 neither had ended after the bench's four hours, nor after four and a half,
-with no output from either. Whether they are slower later in the load or stuck, for
-instance on the flash's data lines at gate level, is not known: the bench prints
-nothing before its verdict, and a diagnostic build that counts the strobes into the
-macro did not fit in the memory the machine had free. The sweep step
-`efpga_block_soc`, run only when named, runs all of the above, and its last command
-is this bench.
+Its first runs, on 2026-11-02, never ended: the SoC was stuck. A diagnostic copy of
+the bench, with the fabric's RTL and the flash controller's state printed each cycle,
+found why. With no delay at all, a flip-flop races the one it resets: in the flash
+controller, `xfer_resetn` falls on the edge that also moves its state machine on
+`dout_valid`, and as it falls it clears `dout_valid` within the same edge, so the
+state machine never sees it. The controller sent its first byte, `0xFF`, and stopped.
+That is the bench, not the layout: on silicon, and in the timing of the flow, a
+flip-flop's output changes after the edge it is clocked by. The bench now gives the
+SoC's flip-flops 1 ns from clock to output, as `tb/gls/run_gls.sh` does for Block A
+in Icarus, on the output gate of each sequential cell, since Verilator takes no delay
+on a UDP; the clock gates' outputs stay ideal, as every clock does. Only the SoC's
+netlist has these cells, from a copy of the models renamed `_d1`: the fabric's
+netlists keep the models without delay, as in `run_block.sh`, because delays on
+its 6,696 latches as well took Verilator past this machine's memory, and the
+wrapper drives and samples the fabric away from its clock's pulse. Built in two steps
+(the C++, then its compiling, in small files) at `-O2`, the model runs about 33
+cycles a second while hart 0 executes from flash, and the images print their
+progress every 20,000 cycles.
+
+On 2026-11-03 it passed, on the netlist of `block_efpga` and the macro's: `TB PASS
+block=mosaic_block_efpga fabric=small netlist=fabric simulators=verilator images=2
+controls=1 cycles=461419`. `shell_regs.v` was loaded by hart 0 from flash, checked
+through the window, and left 0xA5 on the fabric's pins, with the exit value 0 after
+461,419 cycles, as many as the RTL takes. The control, `task_count.v`, ended with
+exit value 0x02 after 426,909 cycles, check 2, as in the RTL. The flash controller's
+chip selects counted on the pins matched the diagnostic's at every 20,000 cycles.
+The bench took 3 hours 45 minutes: 35 to build, 3 hours 10 for the two images side
+by side. The sweep step `efpga_block_soc`, run only when named, runs all of the
+above in one command; its parts passed one by one, not yet as that step.
 
 ## Tools
 
@@ -1443,6 +1566,16 @@ is this bench.
 
 ## Limits
 
+- **A path longer than 16 cycles of the fabric cannot run.** `CLKDIV` holds 4
+  bits, so N is at most 16, and at a 50 ns SoC clock a chain of 40 LUTs at the
+  slow corner needs exactly that (2026-11-07). The flow refuses a design that
+  asks for more, rather than run it at a clock it was not timed at. A slower SoC
+  clock, or a wider `CLKDIV`, would give more.
+- **The dead arcs are found per LUT and per pair.** A reconvergence that spans
+  more than two LUTs, or a gate behind a LUT whose fanout reaches another tile's
+  logic, is not resolved: its arcs stay, and if one closes a loop on a design's
+  path the design is refused, not timed wrongly. None of the designs here leaves
+  one.
 - **`clear` is unsafe on a design that has run; the unload is the way out.**
   Clearing the fabric zeroes every latch at once, and passes through
   half-cleared configurations as loading passes through half-written ones.
@@ -1525,13 +1658,11 @@ is this bench.
   the SoC's cells, and does not remove it; the flow's hold skew is 3.6 ns at ss. Its
   die (5.16 mm²) does not fit Block A's 1,110 µm slot, and the fabric's pads, with no
   pad ring, are pins of their own. Without SRAM the production firmware cannot run
-  on it; its test is the assembly of `run_generic.sh`, with one design. The one-command
-  flow still does not time a design: `shell_regs` was timed here by naming it to
-  `efpga_block_sta.sh`. The coupling of the nets over the macro, the fabric's
+  on it; its test is the assembly of `run_generic.sh`, with one design. The coupling of the nets over the macro, the fabric's
   switching power and the current of oscillating latches before the clear are
   measured on neither block. Why KLayout's rule SB.5a took most of 55 minutes is not
   known. `efpga_block` was hardened before the clock buffer. The netlist bench of the
-  SoC has given no verdict ([the SoC with the macro](#the-soc-with-the-macro)).
+  SoC has no delays but the SoC's 1 ns from clock to output, and runs one design.
 - **What the worker slot is not.** A task is 16 bits in and 32 bits out: the
   fabric reads no memory and writes none, so a task's data goes through the
   user window or the pads, not through the descriptor. The slot holds one task

@@ -54,7 +54,8 @@ flow and current status.
     `tb/mosaic_soc/run_efpga.sh`, `tb/mosaic_soc/run_fw.sh` and
     `tb/mosaic_soc/run_generic.sh` with `EFPGA_DESIGN`,
     `tb/efpga/run_powerup.sh`, `tb/efpga/run_netlist.sh`,
-    `tb/efpga/run_block.sh` and `flow/librelane/scripts/efpga_synth.sh`. It removes
+    `tb/efpga/run_block.sh`, `tb/efpga/run_soc_block.sh` and
+    `flow/librelane/scripts/efpga_synth.sh`. It removes
     the PDK variables and gives the tools their own `HOME`
     ([docs/efpga.md](docs/efpga.md)).
 
