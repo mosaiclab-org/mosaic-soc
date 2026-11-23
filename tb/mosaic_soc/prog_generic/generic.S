@@ -7,6 +7,14 @@
  * and exits.
  * Only RV32I+Zicsr instructions and x0-x15 are used, so the image is valid for
  * RV32E controllers and as an instruction stream on the RV64 simulation tiles.
+ *
+ * MOSAIC_GENERIC_EFPGA=1 (run_generic.sh EFPGA_DESIGN=<design>.v): before it wakes
+ * anyone, hart 0 sets the fabric's clock to MOSAIC_GENERIC_EFPGA_CLKDIV if it is
+ * defined (the N the design was timed at, less one; a read-back that differs is
+ * failure 5), loads the stream of efpga_stream.inc into the eFPGA, connects it
+ * and checks the design's window word 0, a register the user reset clears, on
+ * every data line each way (tb/efpga/shell_regs.v), and leaves 0xA5 in it. A
+ * failed check exits with 0x40000000 | its number.
  */
 
 #include <mosaic_memory_map.inc>
@@ -37,6 +45,9 @@
 #endif
 #ifndef MOSAIC_GENERIC_TESTBENCH_BOOTSTRAP
 #define MOSAIC_GENERIC_TESTBENCH_BOOTSTRAP 0
+#endif
+#ifndef MOSAIC_GENERIC_EFPGA
+#define MOSAIC_GENERIC_EFPGA 0
 #endif
 
 #if MOSAIC_GENERIC_TL_WINDOW
@@ -75,6 +86,70 @@ _start:
     sw   t1, 0(t2)
 
     bnez t0, .Lpark
+
+#if MOSAIC_GENERIC_EFPGA
+    /* The registers of sw/firmware/common/efpga.h: BITSTREAM 0x0, STATUS 0x4
+     * (CONFIGURED 0x2, BUSY 0x1), CONTROL 0x8 (USER_RESET 0x2). */
+    li   t0, MOSAIC_ASM_EFPGA_BASE
+#ifdef MOSAIC_GENERIC_EFPGA_CLKDIV
+    /* CLKDIV 0x18, before the stream: a write while connected is dropped. */
+    li   a1, 5
+    li   a2, MOSAIC_GENERIC_EFPGA_CLKDIV
+    sw   a2, 0x18(t0)
+    lw   a0, 0x18(t0)
+    bne  a0, a2, .Lefpga_fail
+#endif
+    la   t1, efpga_stream
+    la   t2, efpga_stream_end
+.Lefpga_word:
+    lw   a0, 0(t1)
+    sw   a0, 0(t0)
+    addi t1, t1, 4
+    bne  t1, t2, .Lefpga_word
+.Lefpga_busy:
+    lw   a0, 4(t0)
+    andi a2, a0, 1
+    bnez a2, .Lefpga_busy
+    li   a1, 1
+    li   a2, 2
+    bne  a0, a2, .Lefpga_fail
+    sw   a2, 8(t0)
+    sw   zero, 8(t0)
+    li   t1, MOSAIC_ASM_EFPGA_WINDOW_BASE
+    li   a1, 2
+    lw   a0, 0(t1)
+    bnez a0, .Lefpga_fail
+    li   a1, 3
+    li   a2, 1
+.Lefpga_line:
+    sw   a2, 0(t1)
+    lw   a0, 0(t1)
+    bne  a0, a2, .Lefpga_fail
+    xori a3, a2, -1
+    sw   a3, 0(t1)
+    lw   a0, 0(t1)
+    bne  a0, a3, .Lefpga_fail
+    slli a2, a2, 1
+    bnez a2, .Lefpga_line
+    /* The design drives its pads with R[7:0]: a delivery wrapper with no pad
+     * ring has them at its pins (tb/efpga/tb_efpga_soc.sv reads them). */
+    li   a2, 0xA5
+    sw   a2, 0(t1)
+    /* Every request answered: no timeout, nothing blocked. */
+    li   a1, 4
+    lw   a0, 4(t0)
+    li   a2, 2
+    beq  a0, a2, .Lefpga_done
+.Lefpga_fail:
+    li   t0, GENERIC_SOC_CTRL_BASE
+    li   a0, 0x40000000
+    or   a0, a0, a1
+    sw   a0, 4(t0)
+    li   t1, 1
+    sw   t1, 0(t0)
+    j    .Lpark
+.Lefpga_done:
+#endif
 
 #if MOSAIC_GENERIC_TDU && MOSAIC_GENERIC_WAKE_MASK
     /* Normal AMP images can broadcast-wake before queueing.  A worker-only
@@ -159,3 +234,11 @@ _start:
 
 .Lpark:
     j .Lpark
+
+#if MOSAIC_GENERIC_PRIMARY && MOSAIC_GENERIC_EFPGA
+    .section .rodata
+    .balign 4
+efpga_stream:
+#include "efpga_stream.inc"
+efpga_stream_end:
+#endif

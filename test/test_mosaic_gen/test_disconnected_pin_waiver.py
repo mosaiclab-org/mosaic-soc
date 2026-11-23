@@ -62,6 +62,26 @@ def test_the_table_names_the_top_modules_disconnected_pins(tmp_path):
     assert disconnected_pins(tmp_path / "nowhere") is None
 
 
+# An instance's pins, from runs/chip_efpga (2026-11-08): the output-only pads'
+# readbacks. OpenDB already names them instance/pin; prefixing the instance
+# again made outputs[0\].pad/outputs[0\].pad/Y, which no waiver could name.
+INSTANCE_TABLE = """\
+┏━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┓
+┃ Macro/Instance   ┃ Power Pins            ┃ Disconnected ┃ Signal Pins            ┃ Disconnected       ┃
+┡━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━┩
+│ outputs[0\\].pad  │ outputs[0\\].pad/DVDD  │              │ outputs[0\\].pad/A      │ outputs[0\\].pad/Y  │
+│                  │ outputs[0\\].pad/DVSS  │              │ outputs[0\\].pad/CS     │                    │
+│ outputs[10\\].pad │ outputs[10\\].pad/DVDD │              │ outputs[10\\].pad/A     │ outputs[10\\].pad/Y │
+│                  │ outputs[10\\].pad/DVSS │              │ outputs[10\\].pad/CS    │                    │
+└──────────────────┴───────────────────────┴──────────────┴────────────────────────┴────────────────────┘
+"""
+
+
+def test_an_instances_pins_are_named_as_opendb_names_them(tmp_path):
+    assert disconnected_pins(_run(tmp_path, INSTANCE_TABLE)) == [
+        "outputs[0\\].pad/Y", "outputs[10\\].pad/Y"]
+
+
 def _apply(run, waiver, critical=0):
     return apply_waivers(
         [(KEY, 2.0)], [waiver], design="mosaic_block_a",

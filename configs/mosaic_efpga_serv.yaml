@@ -1,0 +1,53 @@
+# Copyright 2026 MOSAIC-SoC contributors
+# SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+#
+# mosaic_efpga_serv.yaml — the eFPGA demonstration with a SERV TITAN: the
+# design of configs/mosaic_efpga_demo.yaml, whose hart 0, which loads the
+# fabric at cold boot, is a bit-serial SERV instead of a cv32e20. Sweep step
+# efpga_serv boots it with a user design (tb/mosaic_soc/run_fw.sh).
+
+soc:
+  name: mosaic_efpga_serv
+  pdk: gf180mcu
+
+  cores:
+    - ip: serv            # TITAN — orchestrator; boots from the boot ROM (hart 0)
+      isa: rv32ic         # C: the boot ROM is compressed
+      count: 1
+      role: titan
+      with_csr: 1
+      compressed: 1
+
+    - ip: fazyrv          # ATLAS worker (hart 1) — boots dormant, woken by the TDU
+      isa: rv32i
+      chunksize: 8
+      count: 1
+      role: atlas
+      boot_addr: 0x1000
+
+    - ip: serv            # NANO worker (hart 2) — boots dormant, woken by the TDU
+      isa: rv32i
+      count: 1
+      role: nano
+      boot_addr: 0x2000
+
+  memory:
+    sram_kb: 32
+    boot_rom_kb: 2
+
+  dma: idma
+
+  bus: obi
+
+  scheduler:
+    tdu: true
+    mode: dynamic
+
+  peripherals:
+    - uart
+    - gpio
+    - timer
+    - spi
+
+  efpga:
+    preset: small

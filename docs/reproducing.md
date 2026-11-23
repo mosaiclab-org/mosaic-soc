@@ -12,6 +12,10 @@ container is a convenience runtime, and its results are labelled as such.
 nix develop .#sim        # simulation: Verilator 5.050, RISC-V GCC, Icarus, cocotb,
                          # kepler-formal, verible  (also the default shell)
 nix develop .#physical   # the LibreLane 3.0.0 shell (same as flow/librelane's)
+nix develop .#efpga      # the eFPGA fabric tools: FABulous 2.2.0, Yosys 0.62,
+                         # nextpnr-generic 0.9
+nix develop .#fabric     # the efpga shell, plus LibreLane 3.0.11's tools for
+                         # hardening the fabric's tiles
 ```
 
 | Tool | Version | Source |
@@ -22,6 +26,9 @@ nix develop .#physical   # the LibreLane 3.0.0 shell (same as flow/librelane's)
 | RISC-V GCC | 14.3.0, `riscv32-none-elf-` | nixpkgs `pkgsCross.riscv32-embedded` |
 | kepler-formal | nix-eda 7.5.0 | the revision `run_lec.sh` last resolved |
 | Icarus, cocotb, verible | nix-eda 6.11 / nixpkgs 25.11 | |
+| FABulous (eFPGA) | 2.2.0 | PyPI, by hash: `util/efpga-requirements.txt` |
+| Yosys, nextpnr-generic (eFPGA) | 0.62 / 0.9 | nix-eda 6.11 / nixpkgs 25.11 |
+| LibreLane (eFPGA tiles) | 3.0.11 | `github:librelane/librelane/3.0.11`, its nix-eda following 3.0.0's |
 
 Why these pins:
 
@@ -34,7 +41,7 @@ Why these pins:
   miscompiles the load-use hazard logic of cv32e40x, so that core computes wrong
   results in simulation with no warning. 5.050 is the release the full-SoC
   regression passed on. 5.044 was never checked.
-- **Two shells, not one.** LibreLane puts nix-eda's Verilator (5.044) on its
+- **Separate shells, not one.** LibreLane puts nix-eda's Verilator (5.044) on its
   PATH, and its lint step calls `verilator` by name. Merging the sim shell into
   it would silently change a tool inside the signoff flow.
 
@@ -44,6 +51,56 @@ Everything else is a binary-cache hit.
 **Disk.** A flake inside a git repository is evaluated from a store copy of the
 tracked tree. A dirty tree makes a new copy each time its content changes.
 Reclaim the space with `nix-collect-garbage` when no run is in progress.
+
+### The eFPGA shell
+
+`nix develop .#efpga` adds no flake input: Yosys and nextpnr are the locked
+nix-eda and nixpkgs packages. Neither nix-eda nor nixpkgs packages FABulous,
+so its Python layer is a separate environment, `build/efpga_env/venv`, which
+the shell builds on first entry with
+`uv pip sync --no-build --require-hashes` from `util/efpga-requirements.txt`.
+That file is FABulous 2.2.0's own lock, exported by `util/efpga-lock.sh`, with
+one substitution (`sdf-timing`, see [efpga.md](efpga.md)). uv runs with
+`--require-hashes`, which rejects a wheel whose hash differs. The first entry
+needs network access to PyPI and about 540 MB under `build/`. Enter the shell
+from the repository root: elsewhere it builds nothing.
+
+The environment contains a LibreLane wheel that FABulous depends on. It must
+never meet the signoff flow, so of that environment the shell puts only two
+entry points on `PATH`, `FABulous` and `bit_gen`, and no Python; `uv`, Yosys
+and nextpnr come from Nix. Do not activate the environment. Entered from
+inside the sim shell it adds no Verilator, so Verilator stays 5.050.
+
+The eFPGA runners (`tb/efpga/run.sh`, `tb/efpga/run_wrapper.sh`,
+`tb/mosaic_soc/run_efpga.sh`, `tb/mosaic_soc/run_fw.sh` with
+`EFPGA_DESIGN`, and the synthesis, `flow/librelane/scripts/efpga_synth.sh`)
+enter this shell by themselves. `util/mosaic_gen/efpga_gen.py`
+checks the three versions before it runs anything and refuses others;
+`mosaic doctor` does not check them. [efpga.md](efpga.md) describes what the
+tools produce.
+
+### The fabric shell
+
+`nix develop .#fabric` is the eFPGA shell plus the tools LibreLane 3.0.11 lists
+for itself (`includedTools`): OpenSTA, Yosys, OpenROAD, Netgen, Magic, KLayout,
+Icarus and Verilator. FABulous 2.2.0 pins LibreLane 3.0.11, whose wheel is in
+the eFPGA environment, and drives it to harden tiles. 3.0.11 locks the same
+nix-eda as 3.0.0 (6.11.0, `8f990fb`) and pins the same OpenROAD (`dcf36133`)
+and OpenSTA (`857316ff`); the input's nix-eda follows the signoff flow's, so
+on 2026-10-29 the shell built its own derivations and fetched only loguru.
+LibreLane's tools come first on `PATH`: its `yosys` is the Yosys 0.62 build
+with the Python packages LibreLane's scripts import. Its Verilator is
+LibreLane's 5.044, as in the physical shell. The shell drops `PDK_ROOT`, `PDK`,
+`PDKPATH`, `FAB_PDK` and `FAB_PDK_ROOT`, and names two things for
+`efpga_gen.py --harden`: `MOSAIC_FABULOUS_PYTHON`, the environment's
+interpreter through a wrapper kept off `PATH`, and `MOSAIC_FABRIC_PYTHONPATH`,
+which the tools get as `PYTHONPATH`. FABulous's flow runs scripts inside
+OpenROAD's Python 3.13 that import librelane and some of FABulous's own
+modules, while FABulous itself lives in the 3.12 environment: the path holds
+LibreLane 3.0.11 and loguru built for 3.13 (LibreLane's test suite is skipped
+in that build) and a directory whose one entry links to the environment's
+`fabulous` package, pure Python on that path. The signoff flow stays on
+LibreLane 3.0.0. `tb/efpga/run_netlist.sh` enters this shell by itself.
 
 ### The testbench runners refuse, they don't guess
 

@@ -112,6 +112,18 @@ fi
 # hardens without hand-editing 526 paths, and a stale bundle cannot silently
 # feed old RTL into the flow.
 REPO="$(cd "$FLOW/../.." && pwd)"
+RESOLVED="$WORK/.resolved_${TAG}.yaml"
+FRAGMENT="$WORK/.filelist_${TAG}.yaml"
+DESIGN="$(sed -nE 's/^DESIGN_NAME:[[:space:]]*([A-Za-z_][A-Za-z0-9_]*).*/\1/p' "$FLOW/$CONFIG" | head -1)"
+if [ -z "$DESIGN" ]; then
+  echo "ERROR: $CONFIG declares no DESIGN_NAME" >&2
+  exit 2
+fi
+# MOSAIC_FILELIST=<yaml> gives the source list of a block that is not a generated
+# bundle (flow/librelane/scripts/efpga_block.sh). Nothing after this differs.
+if [ -n "${MOSAIC_FILELIST:-}" ]; then
+  cp "$MOSAIC_FILELIST" "$FRAGMENT"
+else
 MANIFEST="${MOSAIC_MANIFEST:-}"
 if [ -z "$MANIFEST" ]; then
   # Absolute paths: this script runs from flow/librelane, not the repo root.
@@ -133,16 +145,9 @@ if [ -z "$BUILD_ROOT" ] || [ ! -d "$BUILD_ROOT" ]; then
   exit 2
 fi
 
-RESOLVED="$WORK/.resolved_${TAG}.yaml"
-FRAGMENT="$WORK/.filelist_${TAG}.yaml"
 # The delivery wrapper is named after the design: DESIGN_NAME must equal the
 # top module name, so mosaic_block_b lives in experimental/mosaic_block_b.sv.
 # Deriving it here keeps the config the single place the design is named.
-DESIGN="$(sed -nE 's/^DESIGN_NAME:[[:space:]]*([A-Za-z_][A-Za-z0-9_]*).*/\1/p' "$FLOW/$CONFIG" | head -1)"
-if [ -z "$DESIGN" ]; then
-  echo "ERROR: $CONFIG declares no DESIGN_NAME" >&2
-  exit 2
-fi
 WRAPPER="flow/librelane/experimental/${DESIGN}.sv"
 if [ ! -f "$REPO/$WRAPPER" ]; then
   echo "ERROR: no delivery wrapper for design '$DESIGN' at $WRAPPER" >&2
@@ -155,11 +160,12 @@ python3 "$FLOW/scripts/gen_filelist.py" "$REPO" \
     --manifest "$MANIFEST" --build-root "$BUILD_ROOT" --output "$FRAGMENT" \
     --wrapper "$WRAPPER" \
     || { echo "ERROR: could not resolve the source list" >&2; exit 2; }
+fi
 # LibreLane takes one config file, so the template and the resolved lists are
 # concatenated into a run-local copy. It lives beside the template so any
 # `dir::` references keep resolving.
 cat "$FLOW/$CONFIG" "$FRAGMENT" > "$RESOLVED"
-echo "### sources : $(grep -c '^- /' "$FRAGMENT") files + include dirs, resolved from $(basename "$(dirname "$MANIFEST")")"
+echo "### sources : $(grep -c '^- /' "$FRAGMENT") files + include dirs, resolved from ${MOSAIC_FILELIST:-$(basename "$(dirname "$MANIFEST")")}"
 
 # ── preflight ─────────────────────────────────────────────────────────────
 # One second, against a flow that runs for hours. Every check here was bought
@@ -210,9 +216,9 @@ if [ -n "${MOSAIC_RESOURCE_CONFIG:-}" ]; then
 fi
 
 echo "### SIGNOFF — no steps skipped"
-echo "### design : $DESIGN  (wrapper $WRAPPER)"
+echo "### design : $DESIGN  (wrapper ${WRAPPER:-none})"
 echo "### config : $CONFIG"
-echo "### rtl    : ${MOSAIC_CFG:-configs/mosaic_tapeout_ultra.yaml}"
+echo "### rtl    : ${MOSAIC_FILELIST:-${MOSAIC_CFG:-configs/mosaic_tapeout_ultra.yaml}}"
 echo "### tag    : $TAG"
 echo "### log    : $LOG"
 echo

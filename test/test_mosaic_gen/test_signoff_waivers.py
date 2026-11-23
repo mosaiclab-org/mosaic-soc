@@ -236,6 +236,8 @@ def test_the_shipped_waiver_file_is_valid_and_bounded():
     # design__disconnected_pin__count joined 2026-09-24: the external padframe's
     # eleven _IN readbacks of output-only pads. A hard check, so it is waived
     # only by the exact pin names (IDENTITY_REQUIRED), never by count.
+    # mosaic_chip_efpga joined 2026-11-14 on the same metric: the Y pins of its
+    # eleven output-only bi_t pads, run chip_efpga (signoff-clean, run 3).
     assert {w.metric for w in waivers} == {"design__max_fanout_violation__count",
                                            "design__disconnected_pin__count"}
     for entry in waivers:
@@ -243,7 +245,7 @@ def test_the_shipped_waiver_file_is_valid_and_bounded():
             assert entry.pinned, f"{entry.metric} can only be waived by name"
     # Every waiver names a design that has actually been hardened. A waiver
     # for a design nobody built is a waiver nobody measured.
-    assert {w.design for w in waivers} == {"mosaic_block_a"}
+    assert {w.design for w in waivers} == {"mosaic_block_a", "mosaic_chip_efpga"}
     for entry in waivers:
         # Each justification must name what the waiver does NOT cover.
         assert "NOT waived" in entry.justification, (
@@ -278,8 +280,9 @@ def test_the_waiver_file_parses_as_plain_yaml():
 
     data = yaml.safe_load(
         (REPO_ROOT / "flow/librelane/signoff_waivers.yaml").read_text())
-    # One, since the two max-slew waivers were retired 2026-08-16.
-    assert isinstance(data["waivers"], list) and len(data["waivers"]) == 2
+    # Block A's two since the max-slew waivers were retired 2026-08-16, and
+    # mosaic_chip_efpga's disconnected pads since 2026-11-14.
+    assert isinstance(data["waivers"], list) and len(data["waivers"]) == 3
     # Every record must carry all its keys -- the failure this guards against
     # is a `>` block absorbing the next key into the justification text.
     for entry in data["waivers"]:

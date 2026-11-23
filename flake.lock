@@ -21,10 +21,53 @@
         "type": "github"
       }
     },
+    "ciel_2": {
+      "inputs": {
+        "nix-eda": [
+          "librelane-fabric",
+          "nix-eda"
+        ]
+      },
+      "locked": {
+        "lastModified": 1764091696,
+        "narHash": "sha256-AWbkHL0zO3tD0mE3dZIcj8mVND7o3imTxOpEfOtlRDI=",
+        "owner": "fossi-foundation",
+        "repo": "ciel",
+        "rev": "afcb23d368614ffa1e7e96584ed33f839c71c576",
+        "type": "github"
+      },
+      "original": {
+        "owner": "fossi-foundation",
+        "repo": "ciel",
+        "type": "github"
+      }
+    },
     "devshell": {
       "inputs": {
         "nixpkgs": [
           "librelane",
+          "nix-eda",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1768818222,
+        "narHash": "sha256-460jc0+CZfyaO8+w8JNtlClB2n4ui1RbHfPTLkpwhU8=",
+        "owner": "numtide",
+        "repo": "devshell",
+        "rev": "255a2b1725a20d060f566e4755dbf571bbbb5f76",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "devshell",
+        "type": "github"
+      }
+    },
+    "devshell_2": {
+      "inputs": {
+        "nixpkgs": [
+          "librelane-fabric",
           "nix-eda",
           "nixpkgs"
         ]
@@ -57,6 +100,20 @@
         "url": "https://flakehub.com/f/edolstra/flake-compat/1.tar.gz"
       }
     },
+    "flake-compat_2": {
+      "locked": {
+        "lastModified": 1733328505,
+        "narHash": "sha256-NeCCThCEP3eCl2l/+27kNNK7QrwZB1IJCrXfrbv5oqU=",
+        "rev": "ff81ac966bb2cae68946d5ed5fc4994f96d0ffec",
+        "revCount": 69,
+        "type": "tarball",
+        "url": "https://api.flakehub.com/f/pinned/edolstra/flake-compat/1.1.0/01948eb7-9cba-704f-bbf3-3fa956735b52/source.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://flakehub.com/f/edolstra/flake-compat/1.tar.gz"
+      }
+    },
     "librelane": {
       "inputs": {
         "ciel": "ciel",
@@ -75,6 +132,31 @@
       "original": {
         "owner": "librelane",
         "ref": "3.0.0",
+        "repo": "librelane",
+        "type": "github"
+      }
+    },
+    "librelane-fabric": {
+      "inputs": {
+        "ciel": "ciel_2",
+        "devshell": "devshell_2",
+        "flake-compat": "flake-compat_2",
+        "nix-eda": [
+          "librelane",
+          "nix-eda"
+        ]
+      },
+      "locked": {
+        "lastModified": 1787598789,
+        "narHash": "sha256-ef2+YcQdL6Nk1qc34oYjVJOCP7HKYyc9UgHQuJVUldA=",
+        "owner": "librelane",
+        "repo": "librelane",
+        "rev": "33ab64861c5570d65de69295da9a46f5bad32ee3",
+        "type": "github"
+      },
+      "original": {
+        "owner": "librelane",
+        "ref": "3.0.11",
         "repo": "librelane",
         "type": "github"
       }
@@ -152,6 +234,7 @@
     "root": {
       "inputs": {
         "librelane": "librelane",
+        "librelane-fabric": "librelane-fabric",
         "nix-eda-lec": "nix-eda-lec",
         "nixpkgs": [
           "librelane",

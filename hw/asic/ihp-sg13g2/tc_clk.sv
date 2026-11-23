@@ -18,6 +18,8 @@ module tc_clk_and2 (
 
 endmodule
 
+// A wire, as in the generic file. GF180MCU's binds a clock buffer cell, which the
+// eFPGA's UserCLK needs (hw/efpga/mosaic_efpga.sv); no IHP design has the fabric.
 module tc_clk_buffer (
   input  logic clk_i,
   output logic clk_o

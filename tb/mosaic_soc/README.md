@@ -20,8 +20,9 @@ other Verilator.
 | `run_generic.sh` | `mosaic.yaml` | Any configuration. Reads the generated `boot_images.json`, builds one liveness image per boot slot, wakes every worker through the TDU, and requires `sentinel[hart] == hart + 1` from every configured hart. Log: `sim-generic.log`. |
 | `run.sh` | `configs/mosaic_wake_demo.yaml` | The wake demonstration on a design with one orchestrator and two workers. Log: `sim.log`. |
 | `run_titan.sh` | `configs/mosaic_titan_log.yaml` | Four `titan` harts running one program that branches on `mhartid`: hart 0 queues three task descriptors, the others pop and execute them. |
-| `run_fw.sh` | `mosaic.yaml` | The deployable firmware image of `sw/firmware`, loaded only through the SPI flash model: boot ROM hand-off, execution in place, worker copy with CRC check, TDU dispatch to six workers. |
+| `run_fw.sh` | `mosaic.yaml` | The deployable firmware image of `sw/firmware`, loaded only through the SPI flash model: boot ROM hand-off, execution in place, worker copy with CRC check, TDU dispatch to six workers. With `EFPGA_DESIGN=<design>.v` on a design with `soc.efpga` (sweep step `efpga_design`: `configs/mosaic_efpga_demo.yaml`, `tb/efpga/shell_regs.v`, `tb/efpga/shell_regs_test.c`), the user design is compiled for the fabric through the shell and loaded at cold boot, and `EFPGA_TEST=<test>.c` adds the user's C check of it (`uint32_t efpga_test(void)`, 0 passes); `WARM_REBOOTS=<n>` resets the SoC after each of the first n boots (`+warm_reboots` of `tb_top.sv`), and the run passes only after n reboots; logs `mcu-gen.log`, `efpga-design.log`, `fw-build.log`, `sim-fw.log`. |
 | `run_uart.sh` | `configs/mosaic_tapeout_ultra.yaml` | The UART of a design whose only peripheral is the UART. |
+| `run_efpga.sh` | `configs/mosaic_efpga_demo.yaml` | The eFPGA wrapper `hw/efpga/mosaic_efpga.sv` and its fabric, which `soc.efpga` puts in the SoC: hart 0 loads a bitstream through its registers, uses the user design, unloads it and loads it again; then the production firmware boots from flash past a stream its loader refuses, and into a user's check that must report its value. Seven firmware runs, five of which must fail with a named exit value; logs `sim-efpga-<run>.log`. See `docs/efpga.md`. |
 
 ```bash
 MOSAIC_CFG=configs/mosaic_picorv32.yaml tb/mosaic_soc/run_generic.sh
@@ -103,5 +104,6 @@ netlist of library cells.
 | `prog_generic/generic.S` | the liveness program of `run_generic.sh` |
 | `prog_titan/` | the multiprocessor program |
 | `prog_uart/uart.S` | the UART program |
+| `prog_efpga/efpga.S` | the eFPGA program of `run_efpga.sh` |
 | `mosaic_tb.sv` | a diagnostic top level that dumps fetch addresses and reset state |
 | `cve2_clock_gate.sv` | the simulation clock gate |

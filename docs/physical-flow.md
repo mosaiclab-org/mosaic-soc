@@ -19,7 +19,7 @@ by running the flow.
 ## What a run does
 
 A run hardens a *delivery wrapper*: a small top module that instantiates the
-generated SoC and exposes only the pins the block needs. Three ship, in
+generated SoC and exposes only the pins the block needs. Five ship, in
 `flow/librelane/experimental/`:
 
 | Wrapper | SoC configuration | Harts |
@@ -27,9 +27,23 @@ generated SoC and exposes only the pins the block needs. Three ship, in
 | `mosaic_block_a.sv` | `configs/mosaic_tapeout_ultra.yaml` | 2 (Block A, the GF180MCU reference design) |
 | `mosaic_block_b.sv` | `configs/mosaic_blockb_3hart.yaml` | 3 |
 | `mosaic_block_c.sv` | `configs/mosaic_blockc_4hart.yaml` | 4 |
+| `mosaic_block_efpga.sv` | `configs/mosaic_block_efpga.yaml` | 2, Block A's SoC with the eFPGA fabric of `small` |
+| `mosaic_chip_efpga.sv` | `configs/mosaic_block_efpga.yaml` | 2, the same SoC with its own GF180MCU pad ring |
 
-All three are SERV-only designs that execute in place from external flash and
-have no on-chip SRAM pool.
+All five are SERV-only designs that execute in place from external flash and
+have no on-chip SRAM pool. The fabric of `mosaic_block_efpga` is a hard macro, so
+that design is hardened by `flow/librelane/scripts/efpga_block.sh`, which writes its
+configuration and calls `run_signoff.sh` ([efpga.md](efpga.md#the-soc-with-the-macro)).
+`gen_filelist.py` refuses a design with `soc.efpga` unless told the fabric is a
+macro (`--efpga-macro`).
+
+For `mosaic_chip_efpga`, `EFPGA_CHIP=flow/librelane/slots/slot_1x1_efpga.yaml`
+selects the Chip flow through `efpga_block.sh`. Its 3,932 × 5,122 µm die
+includes the seal ring. The chip adds KLayout antenna and density checks,
+pad-specific power-grid connections and source-synchronous flash constraints.
+Its physical signoff passed on 2026-11-14; see
+[the chip run](efpga.md#the-chip-with-its-pad-ring) for the exact inputs and
+the separate eFPGA timing and netlist checks.
 
 The flow is LibreLane's `Classic` flow with the settings in
 `flow/librelane/signoff_template.yaml`. After place and route it runs Magic
@@ -96,6 +110,7 @@ Environment variables the script reads:
 | `MOSAIC_PIN_TEMPLATE` | an external padframe DEF: a file that fixes the die and the pin positions the block must match |
 | `MOSAIC_WORK_DIR` | where the run is written; default `flow/librelane/experimental`, and `flow/librelane/integration` for a run hardened against an external padframe DEF |
 | `MOSAIC_MANIFEST` | pin the RTL bundle explicitly, so that a series of runs hardens the same RTL |
+| `MOSAIC_FILELIST` | a YAML of `VERILOG_FILES` and `VERILOG_INCLUDE_DIRS` to harden instead of a generated bundle's (`flow/librelane/scripts/efpga_block.sh`) |
 | `MOSAIC_RESOURCE_CONFIG` | a file of `*_THREADS` keys only, for machines with little memory (`experimental/resources_lowmem.yaml`) |
 | `MOSAIC_WATCH_ROUTING=1` | enable the routing guard described below |
 
@@ -126,11 +141,14 @@ states:
 - `preconditions`: other metrics that must hold on the raw run before the waiver
   is considered.
 
-Two waivers are recorded, both for `mosaic_block_a` on run `blocka_d15_rstsync`:
+Three waivers are recorded. Two are for `mosaic_block_a` on run `blocka_d15_rstsync`:
 two clock-tree root buffers that exceed the project's fan-out limit of 10 (the
 GF180MCU libraries declare no fan-out limit, and maximum transition and maximum
 capacitance are both at zero violations), and eleven disconnected input
 terminals of output-only pads that an external padframe defines.
+The third names exactly the eleven `outputs[0..10].pad/Y` readbacks of
+`mosaic_chip_efpga`, with eleven critical disconnected pins as a precondition.
+It expires on 2027-02-28 and accepts no other disconnected pin.
 
 `./mosaic waiver-author` audits every waiver against the run it cites.
 
@@ -192,7 +210,8 @@ verdict on a run in progress.
 
 ## Measured results
 
-Read from the tracked `final/metrics.json` files on 2026-10-03. "Accepted" is
+Read from the tracked `final/metrics.json` files on 2026-10-03, the two runs with
+the eFPGA macro on 2026-11-02, and the chip run completed on 2026-11-14. "Accepted" is
 the verdict of the PPA gate. Slack is the worst corner. Runs live under
 `flow/librelane/experimental/runs/` unless marked.
 
@@ -211,9 +230,22 @@ the verdict of the PPA gate. Slack is the worst corner. Runs live under
 | `blockc_m45` | Block C | 2.1836 | 70.8% | +20.303 | +0.061 | 0 | all zero | accepted |
 | `blockc_slew45` | Block C | 2.1836 | 70.6% | +20.657 | +0.044 | 12 | all zero | rejected |
 | `blockc_u65` | Block C | 2.0584 | 72.4% | +20.494 | +0.071 | 1018 | all zero | rejected |
+| `efpga_block` | `mosaic_efpga` with the fabric of `small` as a macro | 3.0068 | 83.5% with the macro | +14.265 | +0.532 | 0 | all zero except 53 disconnected pins, no waiver | rejected |
+| `block_efpga` | `mosaic_block_efpga`: Block A's SoC with the fabric of `small` as a macro | 5.1580 | 74.7% with the macro | +3.052 | +0.520 | 0 | all zero | accepted |
+| `chip_efpga` | `mosaic_chip_efpga`: the SoC, re-stitched `small` macro and pad ring | 20.1397 | 34.7% with the macro | +8.939 | +0.496 | 0 | all zero except 11 waived pad readbacks | accepted with the waiver |
 
 Notes on the table:
 
+- `chip_efpga` uses the macro in `build/efpga_netlist/fabric_m3`, whose stitch
+  routes from Metal3 up and passes KLayout's antenna deck. The earlier
+  `block_efpga` used a different stitch. The chip's two fanout violations are
+  quality metrics, not accepted by an additional waiver. Its physical signoff
+  does not establish timing of every design programmed into the fabric.
+- `efpga_block` and `block_efpga` are the runs with a hard macro. The 53 pins of
+  `efpga_block` are address bits the wrapper does not read; see
+  [efpga.md](efpga.md#the-wrapper-and-the-macro-as-one-block). It was hardened
+  before the wrapper drove the macro's clock through a buffer of its own, which
+  `block_efpga` needed ([efpga.md](efpga.md#the-soc-with-the-macro)).
 - `blocka_d15_rstsync` is the Block A reference run. It was hardened on a
   1110 um square die against an external padframe DEF, with a reset
   synchronizer, and its waivers were recorded on 2026-09-24. Its clock period is

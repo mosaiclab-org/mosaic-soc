@@ -22,7 +22,6 @@ VERILOG_SOURCES = \
   $(INC)/fifo_pkg.sv \
   $(INC)/addr_map_rule_pkg.sv \
   $(INC)/power_manager_pkg.sv \
-  $(INC)/mosaic_soc_pkg.sv \
   $(TDU)/tdu_pkg.sv \
   $(TDU)/tdu.sv \
   $(REPO)/tb/tdu/soc/tdu_soc_tb_top.sv

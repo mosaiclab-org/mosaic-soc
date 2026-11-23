@@ -17,6 +17,9 @@
       "power-aware": "tdu_pkg::SCHED_POWER_AWARE",
   }[sched_mode]
   nh = xheep.num_harts()
+  efpga = xheep.get_extension("efpga")
+  # With the eFPGA the TDU has one more worker slot than harts, the last.
+  tdu_slots = "mosaic_soc_pkg::TDU_SLOTS" if efpga else "mosaic_soc_pkg::NUM_HARTS"
 %>
 
 
@@ -124,6 +127,12 @@ module ao_peripheral_subsystem
     // EXTERNAL PERIPH
     output reg_req_t ext_peripheral_slave_req_o,
     input  reg_rsp_t ext_peripheral_slave_resp_i,
+% if efpga:
+
+    // The registers of the eFPGA, instantiated in mosaic_soc
+    output reg_req_t efpga_req_o,
+    input  reg_rsp_t efpga_rsp_i,
+% endif
 
     // SPC interface
     input  logic [mosaic_soc_pkg::DMA_CH_NUM-1:0] ext_dma_slot_tx_i,
@@ -142,11 +151,18 @@ module ao_peripheral_subsystem
 % if tdu_enabled:
     ,
     // MOSAIC Task Dispatch Unit (multi-core only)
-    input  logic [mosaic_soc_pkg::NUM_HARTS-1:0] tdu_core_running_i,
-    input  logic [mosaic_soc_pkg::NUM_HARTS-1:0] tdu_core_sleep_i,
-    output logic [mosaic_soc_pkg::NUM_HARTS-1:0] tdu_core_wake_o,
-    output logic [mosaic_soc_pkg::NUM_HARTS-1:0] tdu_core_park_o,
+    input  logic [${tdu_slots}-1:0] tdu_core_running_i,
+    input  logic [${tdu_slots}-1:0] tdu_core_sleep_i,
+    output logic [${tdu_slots}-1:0] tdu_core_wake_o,
+    output logic [${tdu_slots}-1:0] tdu_core_park_o,
     output logic                                      tdu_irq_o
+% if efpga:
+    ,
+    // The pop of the eFPGA, the TDU's last worker slot
+    input  logic        tdu_hw_pop_req_i,
+    output logic        tdu_hw_pop_gnt_o,
+    output logic [31:0] tdu_hw_pop_data_o
+% endif
 % endif
 );
 
@@ -201,6 +217,10 @@ module ao_peripheral_subsystem
   /* Peripheral demuxed register interface */
   assign ext_peripheral_slave_req_o = ao_peripheral_slv_req[mosaic_soc_pkg::EXT_PERIPHERAL_IDX];
   assign ao_peripheral_slv_rsp[mosaic_soc_pkg::EXT_PERIPHERAL_IDX] = ext_peripheral_slave_resp_i;
+% if efpga:
+  assign efpga_req_o = ao_peripheral_slv_req[mosaic_soc_pkg::EFPGA_IDX];
+  assign ao_peripheral_slv_rsp[mosaic_soc_pkg::EFPGA_IDX] = efpga_rsp_i;
+% endif
 
 
 % if base_peripheral_domain.contains_peripheral('pad_control'):
@@ -701,7 +721,7 @@ module ao_peripheral_subsystem
 
 % if tdu_enabled:
   tdu #(
-      .NUM_HARTS(mosaic_soc_pkg::NUM_HARTS),
+      .NUM_HARTS(${tdu_slots}),
       .RESET_SCHED_MODE(${sched_mode_sv})
   ) tdu_i (
       .clk_i          (clk_i),
@@ -712,7 +732,16 @@ module ao_peripheral_subsystem
       .core_sleep_i   (tdu_core_sleep_i),
       .core_wake_o    (tdu_core_wake_o),
       .core_park_o    (tdu_core_park_o),
-      .tdu_irq_o      (tdu_irq_o)
+      .tdu_irq_o      (tdu_irq_o),
+% if efpga:
+      .hw_pop_req_i   (tdu_hw_pop_req_i),
+      .hw_pop_gnt_o   (tdu_hw_pop_gnt_o),
+      .hw_pop_data_o  (tdu_hw_pop_data_o)
+% else:
+      .hw_pop_req_i   (1'b0),
+      .hw_pop_gnt_o   (),
+      .hw_pop_data_o  ()
+% endif
   );
 % endif
 % endif

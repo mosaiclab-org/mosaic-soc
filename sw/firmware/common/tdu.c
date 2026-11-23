@@ -16,9 +16,17 @@
 #include <stdint.h>
 
 #if defined(MOSAIC_USE_BUILD_GENERATED_HEADERS)
+#include <mosaic_memory_map.h>
 #include <mosaic_topology.h>
 #else
 #include "mosaic_legacy_config.h"
+#endif
+
+/* The worker slots of the TDU: the harts, then the eFPGA's (soc.efpga). */
+#ifdef MOSAIC_EFPGA_TDU_SLOT
+#define TDU_SLOTS (MOSAIC_EFPGA_TDU_SLOT + 1u)
+#else
+#define TDU_SLOTS MOSAIC_NUM_HARTS
 #endif
 
 /** MMIO region handle for the TDU register space. */
@@ -92,7 +100,7 @@ tdu_core_status_t tdu_get_core_status(void) {
 // ── Task queue ─────────────────────────────────────────────────────
 
 int tdu_task_push(const tdu_task_t *task) {
-    if (task == NULL || task->core_hint >= MOSAIC_NUM_HARTS) return -1;
+    if (task == NULL || task->core_hint >= TDU_SLOTS) return -1;
     tdu_task_status_t st = tdu_get_task_status();
     if (st.full) return -1;
 
@@ -158,6 +166,8 @@ void tdu_clear_active_hart_cycles(void) {
 // ── Convenience: dispatch task + wake ──────────────────────────────
 
 int tdu_dispatch_task(const tdu_task_t *task) {
+    /* A hart only: the eFPGA's slot takes a task through mosaic_efpga_task
+     * (efpga.h), which first makes sure that the queue is empty. */
     if (task == NULL || task->core_hint >= MOSAIC_NUM_HARTS) return -1;
     if (tdu_task_push(task) != 0) return -1;
 

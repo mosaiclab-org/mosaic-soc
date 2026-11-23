@@ -453,6 +453,11 @@ def resolved_manifest(
     if mosaic_cfg.bus == "floonoc":
         flags.append("mosaic_floonoc")
         dependencies.extend(["mosaic:ip:axi_obi", "mosaic:ip:floonoc_fabric"])
+    # The fabric of soc.efpga is generated into the bundle (efpga_gen.soc_fabric)
+    # and compiled from there, like Berkeley's ordered fragment below.
+    efpga_dir = paths["generated"] / "efpga"
+    if mosaic_cfg.efpga:
+        flags.append("mosaic_efpga")
 
     generated = [dict(item) for item in generated_files]
     for item in generated:
@@ -503,6 +508,7 @@ def resolved_manifest(
                 "gpio_ao": mosaic_cfg.gpio_ao,
                 "ao_rv_timer": mosaic_cfg.ao_rv_timer,
                 "ao_fast_intr": mosaic_cfg.ao_fast_intr,
+                "efpga": mosaic_cfg.efpga,
             },
             "memory": {
                 "declared_sram_kb": mosaic_cfg.memory.sram_kb,
@@ -529,7 +535,8 @@ def resolved_manifest(
             "include_roots": [
                 "hw/vendor/pulp_platform/obi/include",
                 "hw/vendor/mosaic/idma/rtl/include",
-            ],
+            ]
+            + ([str(efpga_dir)] if mosaic_cfg.efpga else []),
             # Berkeley's extracted FIRRTL closure is still expressed by its
             # ordered .f fragment. gen_filelist.py retains this one narrow
             # fallback until berkeley.core itself carries the full 299-module
@@ -538,7 +545,8 @@ def resolved_manifest(
                 ["hw/vendor/mosaic/berkeley/berkeley.f"]
                 if "mosaic_berkeley" in flags
                 else []
-            ),
+            )
+            + ([str(efpga_dir / "soc.f")] if mosaic_cfg.efpga else []),
         },
         "generated_files": generated,
     }

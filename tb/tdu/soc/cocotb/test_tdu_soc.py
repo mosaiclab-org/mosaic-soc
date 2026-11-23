@@ -6,7 +6,10 @@ matter at the SoC integration level:
   * the TDU is reachable + its registers read/write at the SoC address,
   * the 8-deep task FIFO (push / status count / pop) works,
   * WAKE_REQ generates a core_wake pulse for the targeted hart,
-  * CORE_STATUS reflects the injected per-hart core_sleep inputs.
+  * CORE_STATUS reflects the injected per-hart core_sleep inputs,
+  * the pop of a worker that is not a hart (the eFPGA's, on the last slot)
+    takes only a head meant for that slot, waits for a TASK_POP read in the
+    same cycle, and takes nothing from an empty queue.
 
 Register offsets (tdu_pkg): CORE_STATUS=0x00, SCHED_MODE=0x04, WAKE_MASK=0x08,
 WAKE_REQ=0x0C, TASK_PUSH=0x10, TASK_POP=0x14, TASK_STATUS=0x18,
@@ -15,7 +18,7 @@ WAKE_REQ=0x0C, TASK_PUSH=0x10, TASK_POP=0x14, TASK_STATUS=0x18,
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge, ClockCycles
+from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge, Timer
 
 TDU_BASE = 0x200A0000  # AO_PERIPHERAL_START (0x20000000) + 0xA0000
 CORE_STATUS = TDU_BASE + 0x00
@@ -28,6 +31,7 @@ TASK_STATUS = TDU_BASE + 0x18
 PARK_REQ = TDU_BASE + 0x60
 
 SCHED_DYNAMIC = 1
+HW_SLOT = 6  # NUM_HARTS - 1 of tdu_soc_tb_top
 
 
 def task_desc(task_id, core_hint=0, prio=0):
@@ -65,6 +69,26 @@ async def reg_read(dut, addr):
     return val
 
 
+async def hw_pop(dut, bus_pop=False):
+    """One request of the hardware pop: (grant, data) as seen before the edge
+    that takes it, and with bus_pop, what a TASK_POP read of the same cycle
+    returned."""
+    await FallingEdge(dut.clk_i)
+    dut.hw_pop_req_i.value = 1
+    if bus_pop:
+        dut.reg_addr_i.value = TASK_POP
+        dut.reg_write_i.value = 0
+        dut.reg_valid_i.value = 1
+    await Timer(1, "ns")
+    gnt, data = int(dut.hw_pop_gnt_o.value), int(dut.hw_pop_data_o.value)
+    read = int(dut.reg_rdata_o.value)
+    await RisingEdge(dut.clk_i)
+    dut.hw_pop_req_i.value = 0
+    dut.reg_valid_i.value = 0
+    await RisingEdge(dut.clk_i)
+    return gnt, data, read
+
+
 @cocotb.test()
 async def tdu_soc_level(dut):
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
@@ -73,6 +97,7 @@ async def tdu_soc_level(dut):
     dut.reg_addr_i.value = 0
     dut.reg_wdata_i.value = 0
     dut.core_sleep_i.value = 0
+    dut.hw_pop_req_i.value = 0
     dut.rst_ni.value = 0
     await ClockCycles(dut.clk_i, 10)
     dut.rst_ni.value = 1
@@ -153,6 +178,45 @@ async def tdu_soc_level(dut):
         dut._log.error(
             f"CORE_STATUS ABI mismatch: got 0x{cs:08x}, expected 0x000a0075"
         )
+
+    # 6) The hardware pop. A head meant for a hart: granted, 0, nothing taken.
+    def check(cond, what):
+        nonlocal fails
+        if not cond:
+            fails += 1
+            dut._log.error(what)
+
+    hart = task_desc(0xD4, 1)
+    await reg_write(dut, TASK_PUSH, hart)
+    gnt, data, _ = await hw_pop(dut)
+    check((gnt, data) == (1, 0), f"hw pop of a hart's head: got ({gnt}, 0x{data:x})")
+    check((await reg_read(dut, TASK_STATUS)) & 0x1F == 1, "a hart's head was taken by the hw pop")
+    check(await reg_read(dut, TASK_POP) == hart, "the hart's head did not stay for the hart")
+    # 7) A head meant for the slot: taken.
+    own = task_desc(0xE5, HW_SLOT)
+    await reg_write(dut, TASK_PUSH, own)
+    gnt, data, _ = await hw_pop(dut)
+    check((gnt, data) == (1, own), f"hw pop of its own head: got ({gnt}, 0x{data:x})")
+    check((await reg_read(dut, TASK_STATUS)) & 0x1F == 0x10, "the slot's head was not taken")
+    # 8) A TASK_POP read in the same cycle goes first: one descriptor taken.
+    first, second = task_desc(0xF6, HW_SLOT), task_desc(0xF7, HW_SLOT)
+    await reg_write(dut, TASK_PUSH, first)
+    await reg_write(dut, TASK_PUSH, second)
+    gnt, data, read = await hw_pop(dut, bus_pop=True)
+    check((gnt, data, read) == (0, 0, first),
+          f"hw pop beside a TASK_POP read: got ({gnt}, 0x{data:x}, 0x{read:x})")
+    check((await reg_read(dut, TASK_STATUS)) & 0x1F == 1, "two descriptors taken in one cycle")
+    gnt, data, _ = await hw_pop(dut)
+    check((gnt, data) == (1, second), f"hw pop after the read: got ({gnt}, 0x{data:x})")
+    # 9) An empty queue whose next entry still holds a head for the slot:
+    # granted, 0, and the queue stays empty.
+    for i in range(8):
+        await reg_write(dut, TASK_PUSH, task_desc(0x100 + i, HW_SLOT))
+    for _ in range(8):
+        await reg_read(dut, TASK_POP)
+    gnt, data, _ = await hw_pop(dut)
+    check((gnt, data) == (1, 0), f"hw pop of an empty queue: got ({gnt}, 0x{data:x})")
+    check((await reg_read(dut, TASK_STATUS)) & 0x1F == 0x10, "an empty queue was popped")
 
     dut._log.info(f"=== TDU SoC-level test: {fails} failure(s) ===")
     assert fails == 0, f"{fails} SoC-level TDU check(s) failed"

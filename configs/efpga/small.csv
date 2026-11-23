@@ -1,0 +1,32 @@
+# Copyright 2026 MOSAIC-SoC contributors
+# SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+#
+# eFPGA fabric preset `small`: 4 logic rows of W_IO | LUT4AB | LUT4AB | RAM_IO.
+# 64 LUT4, 8 bidirectional pads on the west edge, 6,696 configuration latches,
+# 80 frames. The tiles are the ones FABulous 2.2.0 ships in its project
+# template; this file is adapted from that template's fabric.csv, cut down to
+# this shape (FABulous is Apache-2.0, see UPSTREAM.md).
+# util/mosaic_gen/efpga_gen.py copies it over the fabric.csv of a fresh
+# FABulous project.
+FabricBegin
+NULL,N_term_single,N_term_single,N_term_RAM_IO
+W_IO,LUT4AB,LUT4AB,RAM_IO
+W_IO,LUT4AB,LUT4AB,RAM_IO
+W_IO,LUT4AB,LUT4AB,RAM_IO
+W_IO,LUT4AB,LUT4AB,RAM_IO
+NULL,S_term_single,S_term_single,S_term_RAM_IO
+FabricEnd
+
+ParametersBegin
+ConfigBitMode,frame_based
+GenerateDelayInSwitchMatrix,80
+MultiplexerStyle,custom
+SuperTileEnable,TRUE
+Tile,./Tile/LUT4AB/LUT4AB.csv
+Tile,./Tile/N_term_single/N_term_single.csv
+Tile,./Tile/S_term_single/S_term_single.csv
+Tile,./Tile/RAM_IO/RAM_IO.csv
+Tile,./Tile/N_term_RAM_IO/N_term_RAM_IO.csv
+Tile,./Tile/S_term_RAM_IO/S_term_RAM_IO.csv
+Tile,./Tile/W_IO/W_IO.csv
+ParametersEnd

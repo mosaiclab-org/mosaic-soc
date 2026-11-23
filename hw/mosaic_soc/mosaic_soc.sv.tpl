@@ -22,6 +22,7 @@
   if debug_hart_mask is None:
       debug_hart_mask = (1 << max(1, nh)) - 1
   interrupt_hart_mask = xheep.get_extension("interrupt_hart_mask") or 0
+  efpga = xheep.get_extension("efpga")
   hart_roles = []
   for group in xheep.cpus():
       hart_roles.extend([group.role] * group.count)
@@ -266,6 +267,30 @@ module mosaic_soc
   // Memory Map SPI Region
   obi_req_t flash_mem_slave_req;
   obi_resp_t flash_mem_slave_resp;
+% if efpga:
+
+  // eFPGA: its registers on the always-on bus, its user window on the system bus
+  reg_req_t efpga_reg_req;
+  reg_rsp_t efpga_reg_rsp;
+  obi_req_t efpga_win_req;
+  obi_resp_t efpga_win_resp;
+  // and its worker slot, the TDU's last (EFPGA_TDU_SLOT)
+  logic efpga_task_wake, efpga_task_park, efpga_task_sleep, efpga_task_pop, efpga_task_pop_gnt;
+  logic [31:0] efpga_task_pop_data;
+% if tdu_enabled:
+  logic [mosaic_soc_pkg::TDU_SLOTS-1:0] tdu_slot_sleep, tdu_slot_wake, tdu_slot_park;
+  assign tdu_slot_sleep = {efpga_task_sleep, core_sleep};
+  assign core_wake = tdu_slot_wake[NRHARTS-1:0];
+  assign core_park = tdu_slot_park[NRHARTS-1:0];
+  assign efpga_task_wake = tdu_slot_wake[mosaic_soc_pkg::EFPGA_TDU_SLOT];
+  assign efpga_task_park = tdu_slot_park[mosaic_soc_pkg::EFPGA_TDU_SLOT];
+% else:
+  assign efpga_task_wake = 1'b0;
+  assign efpga_task_park = 1'b0;
+  assign efpga_task_pop_gnt = 1'b0;
+  assign efpga_task_pop_data = '0;
+% endif
+% endif
 
   // rv_timer
   logic [3:0] rv_timer_intr;
@@ -559,6 +584,10 @@ module mosaic_soc
       .peripheral_slave_resp_i(peripheral_slave_resp),
       .flash_mem_slave_req_o(flash_mem_slave_req),
       .flash_mem_slave_resp_i(flash_mem_slave_resp),
+% if efpga:
+      .efpga_slave_req_o(efpga_win_req),
+      .efpga_slave_resp_i(efpga_win_resp),
+% endif
       .ext_core_instr_req_o(ext_core_instr_req_o),
       .ext_core_instr_resp_i(ext_core_instr_resp_i),
       .ext_core_data_req_o(ext_core_data_req_o),
@@ -659,6 +688,10 @@ module mosaic_soc
       .i2s_rx_valid_i(i2s_rx_valid),
       .ext_peripheral_slave_req_o,
       .ext_peripheral_slave_resp_i,
+% if efpga:
+      .efpga_req_o(efpga_reg_req),
+      .efpga_rsp_i(efpga_reg_rsp),
+% endif
       .ext_dma_slot_tx_i,
       .ext_dma_slot_rx_i,
       .ext_dma_stop_i,
@@ -673,14 +706,55 @@ module mosaic_soc
 % if tdu_enabled:
       ,
       // MOSAIC TDU
+% if efpga:
+      .tdu_core_running_i(~tdu_slot_sleep),
+      .tdu_core_sleep_i(tdu_slot_sleep),
+      .tdu_core_wake_o(tdu_slot_wake),
+      .tdu_core_park_o(tdu_slot_park),
+      .tdu_irq_o(tdu_irq),
+      .tdu_hw_pop_req_i(efpga_task_pop),
+      .tdu_hw_pop_gnt_o(efpga_task_pop_gnt),
+      .tdu_hw_pop_data_o(efpga_task_pop_data)
+% else:
       .tdu_core_running_i(core_running),
       .tdu_core_sleep_i(core_sleep),
       .tdu_core_wake_o(core_wake),
       .tdu_core_park_o(core_park),
       .tdu_irq_o(tdu_irq)
 % endif
+% endif
   );
 
+% if efpga:
+  // The eFPGA fabric (soc.efpga: preset ${efpga["preset"]}), generated into
+  // the bundle by util/mosaic_gen/efpga_gen.py. Out of reset it is isolated;
+  // firmware loads it through its registers (docs/efpga.md).
+  mosaic_efpga #(
+      .ROWS(${efpga["rows"]}),
+      .COLS(${efpga["cols"]}),
+      .FBPR(${efpga["frame_bits_per_row"]}),
+      .MFPC(${efpga["max_frames_per_col"]})
+  ) mosaic_efpga_i (
+      .clk_i,
+      .rst_ni(rst_n_sync && debug_reset_n),
+      .reg_req_i(efpga_reg_req),
+      .reg_rsp_o(efpga_reg_rsp),
+      .obi_req_i(efpga_win_req),
+      .obi_resp_o(efpga_win_resp),
+      .task_wake_i(efpga_task_wake),
+      .task_park_i(efpga_task_park),
+      .task_sleep_o(efpga_task_sleep),
+      .task_pop_o(efpga_task_pop),
+      .task_pop_gnt_i(efpga_task_pop_gnt),
+      .task_pop_data_i(efpga_task_pop_data),
+      // Pad k of the fabric is an option of the pad that carries gpio_k
+      // (configs/pad_cfg.py), which pad_control gives to the fabric on request.
+      .pad_in_i({${", ".join(f"efpga_pad_{k}_i" for k in reversed(range(efpga["pads"])))}}),
+      .pad_out_o({${", ".join(f"efpga_pad_{k}_o" for k in reversed(range(efpga["pads"])))}}),
+      .pad_oe_o({${", ".join(f"efpga_pad_{k}_oe_o" for k in reversed(range(efpga["pads"])))}})
+  );
+
+% endif
   peripheral_subsystem peripheral_subsystem_i (
       .clk_i,
       .rst_ni(peripheral_subsystem_rst_n && debug_reset_n),

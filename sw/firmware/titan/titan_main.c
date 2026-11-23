@@ -122,6 +122,13 @@ static void dispatch_workers(void);
 static void wait_for_completion(void);
 static void signal_success(void);
 static void signal_failure(uint32_t code);
+static void finish(uint32_t efpga_failure);
+
+#ifdef MOSAIC_EFPGA_TEST
+/* The user's check of the eFPGA design (EFPGA_TEST of sw/firmware/Makefile):
+ * 0 when the design does what it should. */
+uint32_t efpga_test(void);
+#endif
 
 /**
  * Main entry point for TITAN firmware.
@@ -130,25 +137,46 @@ static void signal_failure(uint32_t code);
  */
 int main(void) {
     system_init();
+    uint32_t efpga_failure = 0u;
 #ifdef MOSAIC_FLASH_XIP
-    const uint32_t cold_boot_status = mosaic_cold_boot_load_workers();
+    const uint32_t cold_boot_status = mosaic_cold_boot_load_workers(&efpga_failure);
     if (cold_boot_status != 0u) {
         signal_failure(cold_boot_status);
     }
 #ifdef MOSAIC_COLD_BOOT_SMOKE
     /* Focused gate used to prove flash-only loading without waiting for the
      * much slower XIP orchestration demo. Production run_fw leaves this off. */
-    signal_success();
+    finish(efpga_failure);
 #endif
 #endif
     tdu_configure();
     dispatch_workers();
     wait_for_completion();
-    signal_success();
-
-    /* Should never reach here. */
-    while (1) {}
+    finish(efpga_failure);
     return 0;
+}
+
+/**
+ * End the run, once: with the STATUS of a bitstream the eFPGA refused (the
+ * workers ran without it), else with the user's check of the design in the
+ * fabric, 0x40000000 | its value when that is not 0, else with success.
+ */
+static void finish(uint32_t efpga_failure) {
+    uint32_t code = efpga_failure;
+#ifdef MOSAIC_EFPGA_TEST
+    if (code == 0u) {
+        const uint32_t check = efpga_test();
+        if (check != 0u) {
+            code = 0x40000000u | check;
+        }
+    }
+#endif
+    if (code != 0u) {
+        signal_failure(code);
+    } else {
+        signal_success();
+    }
+    while (1) {}
 }
 
 /**

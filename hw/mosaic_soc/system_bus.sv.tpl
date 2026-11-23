@@ -21,6 +21,7 @@
   is_mc = xheep.is_multi_core()
   nh = xheep.num_harts()
   dma_stride = 2 if is_mc else 3
+  efpga = xheep.get_extension("efpga")
 %>
 
 module system_bus
@@ -85,6 +86,11 @@ module system_bus
 
     output obi_req_t  flash_mem_slave_req_o,
     input  obi_resp_t flash_mem_slave_resp_i,
+% if efpga:
+
+    output obi_req_t  efpga_slave_req_o,
+    input  obi_resp_t efpga_slave_resp_i,
+% endif
 
     // External slave ports
     output obi_req_t  ext_core_instr_req_o,
@@ -222,6 +228,9 @@ module system_bus
   assign ao_peripheral_slave_req_o = int_slave_req[mosaic_soc_pkg::AO_PERIPHERAL_IDX];
   assign peripheral_slave_req_o = int_slave_req[mosaic_soc_pkg::PERIPHERAL_IDX];
   assign flash_mem_slave_req_o = int_slave_req[mosaic_soc_pkg::FLASH_MEM_IDX];
+% if efpga:
+  assign efpga_slave_req_o = int_slave_req[mosaic_soc_pkg::EFPGA_WIN_IDX];
+% endif
 
   // External slave requests
 % if is_mc:
@@ -277,6 +286,9 @@ module system_bus
   assign int_slave_resp[mosaic_soc_pkg::AO_PERIPHERAL_IDX] = ao_peripheral_slave_resp_i;
   assign int_slave_resp[mosaic_soc_pkg::PERIPHERAL_IDX] = peripheral_slave_resp_i;
   assign int_slave_resp[mosaic_soc_pkg::FLASH_MEM_IDX] = flash_mem_slave_resp_i;
+% if efpga:
+  assign int_slave_resp[mosaic_soc_pkg::EFPGA_WIN_IDX] = efpga_slave_resp_i;
+% endif
 
   // External slave responses
 % if is_mc:

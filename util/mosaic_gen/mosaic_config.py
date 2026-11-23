@@ -25,6 +25,8 @@ from memory_ss.memory_ss import MemorySS
 try:
     from .core_registry import (
         CORE_SPECS,
+        EFPGA_WINDOW_BASE,
+        EFPGA_WINDOW_SIZE,
         FLASH_XIP_BASE,
         FLASH_XIP_SIZE,
         SCI_CORES,
@@ -34,9 +36,13 @@ try:
         expanded_user_peripherals,
         validate_soc_config,
     )
+    from . import efpga_gen
 except ImportError:  # mcu_gen adds util/mosaic_gen directly to sys.path
+    import efpga_gen
     from core_registry import (
         CORE_SPECS,
+        EFPGA_WINDOW_BASE,
+        EFPGA_WINDOW_SIZE,
         FLASH_XIP_BASE,
         FLASH_XIP_SIZE,
         SCI_CORES,
@@ -138,6 +144,8 @@ class MosaicConfig:
     gpio_ao: bool = True
     ao_rv_timer: bool = True     # mosaic_clint still serves per-hart timers
     ao_fast_intr: bool = True
+    # soc.efpga, e.g. {"preset": "small"}; None: no fabric (docs/efpga.md).
+    efpga: Optional[Dict[str, Any]] = None
 
     # Derived fields (set during build())
     total_cores: int = 0
@@ -313,6 +321,7 @@ def parse_yaml(path: PurePath) -> MosaicConfig:
     cfg.gpio_ao = soc.get("gpio_ao", True)
     cfg.ao_rv_timer = soc.get("ao_rv_timer", True)
     cfg.ao_fast_intr = soc.get("ao_fast_intr", True)
+    cfg.efpga = soc.get("efpga")
     cfg.bus = soc.get("bus", "obi")
     if cfg.bus not in VALID_BUS_TYPES:
         raise RuntimeError(
@@ -520,6 +529,20 @@ def mosaic_to_xheep_kwargs(
         _override_memory_for_log(system, cfg)
 
     # ── 4. Pad ring ──
+    # configs/pad_cfg.py gives the eFPGA's pads their pins; mcu_gen adds the
+    # geometry of the generated fabric before rendering.
+    system.add_extension(
+        "efpga",
+        cfg.efpga
+        and {
+            **cfg.efpga,
+            "window_base": EFPGA_WINDOW_BASE,
+            "window_size": EFPGA_WINDOW_SIZE,
+            "pads": efpga_gen.preset_pads(
+                _resolve_repo_path(f"configs/efpga/{cfg.efpga['preset']}.csv")
+            ),
+        },
+    )
     pad_path = _resolve_repo_path(pads_cfg_path)
     try:
         pad_ring = load_config.load_pad_cfg(pad_path, system)
@@ -742,6 +765,15 @@ def _resolve_base_config(config: dict, cfg: "MosaicConfig") -> dict:
             dma_cfg["is_included"] = "no"
         else:
             dma_cfg["is_included"] = "yes"
+
+    efpga_cfg = config["ao_peripherals"].get("efpga")
+    if efpga_cfg is not None:
+        efpga_cfg["is_included"] = "yes" if cfg.efpga else "no"
+    elif cfg.efpga:
+        raise RuntimeError(
+            "[MOSAIC] soc.efpga needs the always-on peripheral `efpga` in the base "
+            "configuration, as in configs/general.hjson"
+        )
 
     gpio_ao_cfg = config["ao_peripherals"].get("gpio_ao")
     if gpio_ao_cfg is not None:

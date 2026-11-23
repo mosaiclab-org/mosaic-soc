@@ -1,0 +1,58 @@
+# Copyright 2026 MOSAIC-SoC contributors
+# SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+#
+# mosaic_efpga_demo_log.yaml — the wake demonstration on the LOG bus with an eFPGA
+# fabric: mosaic_wake_demo_log.yaml plus `efpga`, as configs/mosaic_efpga_demo.yaml is
+# for the OBI bus. Sweep step efpga_log boots it with a user design
+# (tb/mosaic_soc/run_fw.sh, EFPGA_DESIGN and EFPGA_TEST).
+
+soc:
+  name: mosaic_efpga_demo_log
+  pdk: gf180mcu
+
+  cores:
+    - ip: cv32e20         # TITAN — orchestrator; boots from the boot ROM (hart 0)
+      isa: rv32emc
+      count: 1
+      role: titan
+
+    - ip: fazyrv          # ATLAS worker (hart 1) — boots dormant, woken by the TDU
+      isa: rv32i
+      chunksize: 8
+      count: 1
+      role: atlas
+      boot_addr: 0x1000   # reset PC in RAM — its own program
+
+    - ip: serv            # NANO worker (hart 2) — boots dormant, woken by the TDU
+      isa: rv32i
+      count: 1
+      role: nano
+      boot_addr: 0x2000   # reset PC in RAM — its own program
+
+  memory:
+    sram_kb: 32
+    boot_rom_kb: 2
+
+  dma: idma
+
+  bus: log               # two-tier: LIC over banked SRAM + varlat periph tier
+  bus_opts:
+    log:
+      topology: lic
+      # 13 SoC masters would auto-bank to 16, but the x-heep TESTHARNESS adds
+      # EXT_XBAR_NMASTER=8 external masters to the same crossbar, and the LIC
+      # requires banks >= total masters (13+8=21) -> 32 banks x 1 KB.
+      num_banks: 32
+
+  scheduler:
+    tdu: true
+    mode: dynamic
+
+  peripherals:
+    - uart
+    - gpio
+    - timer
+    - spi
+
+  efpga:
+    preset: small

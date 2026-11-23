@@ -70,6 +70,8 @@ def test_logic_area_excludes_the_physical_only_cells():
         "design__instance__area__class:antenna_cell": 6.0,
     }
     assert logic_area_um2(metrics) == pytest.approx(150.0)
+    macro = {**metrics, "design__instance__area__class:macro": 9000.0}
+    assert logic_area_um2(macro) == pytest.approx(150.0)
     assert logic_area_um2({}) is None
 
 

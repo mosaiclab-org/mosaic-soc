@@ -107,6 +107,13 @@
             length:  0x00010000
             is_included: "yes"
         }
+        // The registers of hw/efpga/mosaic_efpga.sv, with soc.efpga. 0xA0000
+        // and 0xB0000 are the TDU and the CLINT of a multi-core design.
+        efpga: {
+            offset:  0x000C0000
+            length:  0x00010000
+            is_included: "no"
+        }
     }
 
     peripherals: {

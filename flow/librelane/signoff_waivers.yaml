@@ -238,3 +238,53 @@ waivers:
       2026-09-24 onto blocka_d15_rstsync (the synchronizer re-harden), which
       records exactly these eleven names; first measured on
       blocka_padframe_def.
+
+  - metric: design__disconnected_pin__count
+    design: mosaic_chip_efpga
+    accepted_max: 11
+    review_by: 2027-02-28
+    recorded_by: mosaic-soc maintainers
+    evidence: flow/librelane/experimental/runs/chip_efpga
+    expected_violators:
+      - 'outputs[0\].pad/Y'
+      - 'outputs[1\].pad/Y'
+      - 'outputs[2\].pad/Y'
+      - 'outputs[3\].pad/Y'
+      - 'outputs[4\].pad/Y'
+      - 'outputs[5\].pad/Y'
+      - 'outputs[6\].pad/Y'
+      - 'outputs[7\].pad/Y'
+      - 'outputs[8\].pad/Y'
+      - 'outputs[9\].pad/Y'
+      - 'outputs[10\].pad/Y'
+    preconditions:
+      design__critical_disconnected_pin__count: 11
+    justification: >
+      The chip of configs/mosaic_block_efpga.yaml carries its own pad ring
+      (flow/librelane/experimental/mosaic_chip_efpga.sv). Its eleven
+      OUTPUT-ONLY pads -- flash SCK and CS, UART TX, status_valid and the
+      7-bit status bus, outputs[0..10] in that order -- are
+      gf180mcu_fd_io__bi_t cells with OE tied 1 and IE tied 0, so their Y,
+      the pad's input buffer back into the core, carries nothing and is left
+      open. gf180mcu_fd_io has no output-only pad cell; bi_t is the PDK's
+      output pad, and with IE 0 its Y is driven low by the cell, not floating
+      (the PDK's model, gf180mcu_fd_io.v: and (Y, PAD, IE)).
+      This is the same eleven-pad class Block A waives as its padframe's _IN
+      terminals, moved inside the design because here the pads are.
+
+      LibreLane counts a cell with every input connected and its one output
+      open as CRITICAL, so these eleven are both disconnected and critical,
+      and efpga_block.sh runs the chip with ERROR_ON_DISCONNECTED_PINS false
+      so that Checker.DisconnectedPins records rather than stops. That flag
+      opens nothing by itself: the script's own verdict and this gate both
+      compare the run's full_disconnected_pins_table.txt to the names above
+      and accept only an EXACT match. The alternative the LibreLane chip
+      template uses, IGNORE_DISCONNECTED_MODULES on the pad cell, was
+      rejected because it matches every instance of bi_t, so a flash or eFPGA
+      pad whose readback went missing would read clean.
+
+      NOT waived by this record: any disconnected pin not named above, any
+      named pin going missing (the set must match exactly), a twelfth
+      critical pin (precondition), any other design, and every other hard
+      check -- DRC, LVS, XOR, antenna, density -- which have no waiver to
+      fall back on.
