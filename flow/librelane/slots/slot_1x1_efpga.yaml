@@ -1,0 +1,75 @@
+# Copyright 2026 MOSAIC-SoC contributors
+# SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+#
+# The chip of configs/mosaic_block_efpga.yaml in a wafer.space 1x1 slot: the die,
+# the core inside the pad ring, and the order of the pads of
+# flow/librelane/experimental/mosaic_chip_efpga.sv on each side.
+# flow/librelane/scripts/efpga_block.sh reads it when EFPGA_CHIP names it.
+#
+# The die and the core are those of slot_1x1.yaml in wafer-space/
+# gf180mcu-project-template, 3932 x 5122 um with the seal ring. Of that template's
+# four slots it is the only one whose core, 3048 x 4238 um, holds the fabric's
+# macro (1223 x 1784 um) as it was hardened: the core of 1x0p5 is 1647 um high,
+# those of 0p5x1 and 0p5x0p5 1052 um wide.
+#
+# 28 pads of the design and 10 of power, 5 VDD and 5 VSS, one supply of 5 V for the
+# core and the pads. The fabric's pads leave its macro's south edge and are on
+# the south side; the SoC's cells lie east of the macro, by its window, with the
+# flash, the UART, the clock and the reset on the east side and the status on the
+# north. outputs[0..10] are spi_flash_sck, spi_flash_cs, uart_tx, status_valid and
+# status[0..6]. LibreLane spaces each side's pads evenly, from west to east on the
+# south and north sides and from south to north on the east and west.
+
+DESIGN_NAME: mosaic_chip_efpga
+DIE_AREA: [0, 0, 3932, 5122]
+CORE_AREA: [442, 442, 3490, 4680]
+
+PAD_SOUTH: [
+    "efpga\\[0\\].pad",
+    "efpga\\[1\\].pad",
+    "efpga\\[2\\].pad",
+    "efpga\\[3\\].pad",
+    "dvss\\[0\\].pad",
+    "dvdd\\[0\\].pad",
+    "efpga\\[4\\].pad",
+    "efpga\\[5\\].pad",
+    "efpga\\[6\\].pad",
+    "efpga\\[7\\].pad",
+]
+
+PAD_EAST: [
+    "dvss\\[1\\].pad",
+    clk_pad,
+    rst_n_pad,
+    boot_select_pad,
+    execute_from_flash_pad,
+    "dvdd\\[1\\].pad",
+    "outputs\\[0\\].pad",
+    "outputs\\[1\\].pad",
+    "flash_sd\\[0\\].pad",
+    "flash_sd\\[1\\].pad",
+    "flash_sd\\[2\\].pad",
+    "flash_sd\\[3\\].pad",
+    "dvss\\[2\\].pad",
+    uart_rx_pad,
+    "outputs\\[2\\].pad",
+    "dvdd\\[2\\].pad",
+]
+
+PAD_NORTH: [
+    "outputs\\[3\\].pad",
+    "outputs\\[4\\].pad",
+    "outputs\\[5\\].pad",
+    "outputs\\[6\\].pad",
+    "dvss\\[3\\].pad",
+    "dvdd\\[3\\].pad",
+    "outputs\\[7\\].pad",
+    "outputs\\[8\\].pad",
+    "outputs\\[9\\].pad",
+    "outputs\\[10\\].pad",
+]
+
+PAD_WEST: [
+    "dvdd\\[4\\].pad",
+    "dvss\\[4\\].pad",
+]

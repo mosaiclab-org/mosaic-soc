@@ -177,26 +177,22 @@ def disconnected_pins(run_dir: Path) -> Optional[List[str]]:
     Read from `NN-odb-reportdisconnectedpins/full_disconnected_pins_table.txt`,
     a rich box table grouped by module: a row whose first cell is non-empty
     starts a module, and the power and signal "Disconnected" columns list
-    the pins. The metric only counts them; a waiver that names which ones it
-    accepts needs the names.
+    the pins, as OpenDB names them: a port by its name, an instance's pin
+    already as `instance/pin` (with OpenDB's escapes, `outputs[0\\].pad/Y`).
+    The metric only counts them; a waiver that names which ones it accepts
+    needs the names.
     """
     tables = sorted(Path(run_dir).glob("*-odb-reportdisconnectedpins/"
                                        "full_disconnected_pins_table.txt"))
     if not tables:
         return None
-    top = load_design_name(Path(run_dir))
-    module, pins = None, []
+    pins = []
     for line in tables[-1].read_text(errors="replace").splitlines():
         if not line.startswith("\u2502"):          # "│": a body row
             continue
         cells = [c.strip() for c in line.strip("\u2502").split("\u2502")]
-        if len(cells) != 5:
-            continue
-        if cells[0]:
-            module = cells[0]
-        for pin in (cells[2], cells[4]):
-            if pin:
-                pins.append(pin if module == top else f"{module}/{pin}")
+        if len(cells) == 5:
+            pins += [pin for pin in (cells[2], cells[4]) if pin]
     return pins
 
 

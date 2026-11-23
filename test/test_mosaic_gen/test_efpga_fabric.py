@@ -537,5 +537,50 @@ def test_the_fabric_is_stitched_only_from_clean_macros_of_its_own_tiles(tmp_path
 
 def test_the_stitching_driver_parses_and_uses_the_projects_fabric_config():
     compile(efpga_gen.STITCH, "stitch", "exec")
-    assert 'base_config_path=proj / "Fabric" / "gds_config.yaml"' in efpga_gen.STITCH
+    assert 'base_config_path=proj / "Fabric" / "gds_config.yaml", **job["config"]' in efpga_gen.STITCH
     assert "ConditionalMagicDRC.run = DRC.run" in efpga_gen.STITCH  # Magic DRC always runs
+    # its long feeds above Metal2, where a tile's diode may not reach (STITCH_CONFIG)
+    assert efpga_gen.STITCH_CONFIG == {"RT_MIN_LAYER": "Metal3"}
+
+
+def _fake_klayout(tmp_path, items):
+    """A `klayout` that writes a report of ``items`` errors and its arguments."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "klayout").write_text(
+        '#!/bin/sh\necho "$@" > "$HOME/args"\n'
+        'for a in "$@"; do case "$a" in report=*) r="${a#report=}";; esac; done\n'
+        f'printf "<report><items>{"<item></item>" * items}</items></report>" > "$r"\n')
+    (bin_dir / "klayout").chmod(0o755)
+    return {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path)}
+
+
+def test_the_klayout_antenna_deck_counts_the_reports_errors(tmp_path):
+    env = _fake_klayout(tmp_path, 2)
+    gds = tmp_path / "eFPGA.gds"
+    assert efpga_gen._klayout_antenna(gds, tmp_path / "pdk", env, tmp_path / "ant.log") == 2
+    args = (tmp_path / "args").read_text()
+    assert str(tmp_path / "pdk" / efpga_gen.ANTENNA_DECK) in args
+    assert f"input={gds}" in args and "topcell=eFPGA" in args
+
+
+def test_an_antenna_error_leaves_the_stitched_fabric_unclean(tmp_path, monkeypatch):
+    """Clean by every metric of the stitch's flow, unclean by the deck's."""
+    fabric = _fabric_dir(tmp_path)
+    (fabric / "proj" / "fabric.csv").write_text("FabricBegin\nW_IO\nFabricEnd\n")
+    run = _tile_run(tmp_path, fabric, "tiles", {"W_IO": True})
+    seen = {}
+
+    def flow(driver, job, macro, *rest):
+        seen["job"] = job
+        (macro / "final_views" / "gds").mkdir(parents=True)
+        (macro / "final_views" / "gds" / "eFPGA.gds").write_text("")
+        return {"gate": {key: 0 for key in efpga_gen.TILE_GATE}, "clean": True}
+
+    monkeypatch.setattr(efpga_gen, "_macro_flows",
+                        lambda *a: ("python", {}, _fake_klayout(tmp_path, 2), ("rev", "")))
+    monkeypatch.setattr(efpga_gen, "_macro_flow", flow)
+    monkeypatch.setattr(efpga_gen, "_macro_manifest", lambda *a, **k: None)
+    gate = efpga_gen.stitch(fabric, tmp_path / "out", [run], pdk_root=tmp_path / "pdk")
+    assert seen["job"]["config"] == efpga_gen.STITCH_CONFIG
+    assert gate["gate"]["klayout__antenna_error__count"] == 2 and not gate["clean"]

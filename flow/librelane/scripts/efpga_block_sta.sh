@@ -29,12 +29,17 @@ shift 2
 PERIOD="${EFPGA_STA_PERIOD:-50}"
 PDK="${GF180_PDK_ROOT:-$REPO/flow/librelane/gf180mcu}"
 LIB="$PDK/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__"
+# A chip's pad cells, as the flow reads them (gf180mcu_fd_io and gf180mcu_ws_io).
+IO="$PDK/gf180mcuD/libs.ref/gf180mcu_fd_io/lib"
 fail() { echo "BLOCK STA FAIL: $*"; exit 1; }
 # The block's top module and the macro's instance in it, from its netlist.
 NETLIST="$(ls "$VIEWS"/nl/*.nl.v)"
 TOP="$(basename "$NETLIST" .nl.v)"
 INST="$(sed -nE 's/^ *eFPGA +\\?([^ (]+) .*/\1/p' "$NETLIST")"
 [ "$(wc -w <<< "$INST")" -eq 1 ] || fail "not one eFPGA instance in $NETLIST: $INST"
+# A chip's clock arrives on its pad (flow/librelane/experimental/mosaic_chip_efpga.sv).
+CLK=clk_i
+! grep -qw clk_PAD "$NETLIST" || CLK=clk_PAD
 OUT="$REPO/build/efpga_block_sta/$TOP"
 STA="$REPO/build/efpga_sta/$(basename "$RUN")"
 [ -f "$STA/lib/eFPGA__tt_025C_5v00.lib" ] && [ -f "$STA/tiles.tcl" ] \
@@ -51,11 +56,12 @@ cp "$STA"/lib/*.lib "$STA/tiles.tcl" "$OUT/lib/"
 # (period - setup slack), capture_min the hold slack. The worst pin of each.
 cat > "$OUT/window.tcl" <<EOF
 read_liberty ${LIB}\$::env(LIBC).lib
+foreach io [glob -nocomplain $IO/*__\$::env(LIBC).lib] { read_liberty \$io }
 read_liberty $OUT/lib/eFPGA__\$::env(LIBC).window.lib
 read_verilog $NETLIST
 link_design $TOP
 read_spef $VIEWS/spef/\$::env(RC)/$TOP.\$::env(RC).spef
-create_clock -name clk -period $PERIOD [get_ports clk_i]
+create_clock -name clk -period $PERIOD [get_ports $CLK]
 set_propagated_clock [get_clocks clk]
 set in [get_pins {$INST/Tile_*RAM2FAB_D*}]
 set out {}
@@ -88,6 +94,7 @@ EOF
 # The whole block, the macro as its tiles (efpga_sta.sh): only the limits.
 cat > "$OUT/drv.tcl" <<EOF
 read_liberty ${LIB}\$::env(LIBC).lib
+foreach io [glob -nocomplain $IO/*__\$::env(LIBC).lib] { read_liberty \$io }
 source $OUT/lib/tiles.tcl
 read_verilog $NETLIST
 foreach tile [array names nl] { read_verilog \$nl(\$tile) }
@@ -102,7 +109,7 @@ foreach net [get_nets {$INST/*}] {
   }
   if {\$c > 0} { set_load \$c \$net }
 }
-create_clock -name clk -period $PERIOD [get_ports clk_i]
+create_clock -name clk -period $PERIOD [get_ports $CLK]
 set_propagated_clock [get_clocks clk]
 puts "### DRV"
 report_check_types -max_slew -max_capacitance -max_fanout -violators -digits 3

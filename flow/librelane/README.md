@@ -21,16 +21,24 @@ Checked against `util/mosaic_gen/core_registry.py` and the tracked run metrics.
   every hard check with two recorded waivers
   (`integration/runs/blocka_d15_rstsync`). Blocks B and C have runs that pass
   every hard check and are not tapeout-qualified.
-- **`soc.target: tapeout` accepts exactly the Block A configuration**: two SERV
+- **`soc.target: tapeout` accepts the Block A core and memory configuration**: two SERV
   harts on the `obi` fabric, no on-chip SRAM pool, a 128-byte scratchpad, a 1 KB
-  boot ROM, no DMA, no debug module, no PLIC, one UART. Every other combination
-  is refused for `tapeout` and remains valid for `rtl` and `simulation`.
-- **The chip-level flow with a pad ring is not usable from this repository.**
+  boot ROM, no DMA, no debug module, no PLIC, one UART. The eFPGA variant uses
+  the same core and memory configuration and a stitched hard macro. Other
+  core, bus and technology combinations remain outside tapeout qualification;
+  the schema still checks their `rtl` and `simulation` configurations.
+- **The eFPGA chip has a demonstrated pad-ring flow.** `scripts/efpga_block.sh`
+  with `EFPGA_CHIP=flow/librelane/slots/slot_1x1_efpga.yaml` uses the checked-in
+  `mosaic_chip_efpga` wrapper and a stitched `small` fabric macro. The third
+  `experimental/runs/chip_efpga` layout passed physical signoff on 2026-11-14.
+  See [the chip documentation](../../docs/efpga.md#the-chip-with-its-pad-ring)
+  for its separate timing and simulation checks.
+- **The legacy chip-level Makefile targets need external inputs.**
   The `harden`, `classic` and `padring` Makefile targets require a
   `PHYSICAL_BUNDLE` containing a flattened netlist, a bound `mosaic_soc_core`
   adapter and SRAM macro views. None of these ship: `src/mosaic_soc_core.sv` is a
   placeholder that the preflight rejects, and no layout has been produced
-  through this path.
+  through those targets.
 - **Run directories are not in version control.** Only the `final/metrics.json`
   of the runs cited by the area model and the waivers is tracked, plus, for
   `integration/runs/blocka_d15_rstsync`, one disconnected-pin table, the

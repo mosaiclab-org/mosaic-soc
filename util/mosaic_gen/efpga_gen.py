@@ -218,8 +218,18 @@ api.genTileMacro(proj / "Tile" / tile, pins, out, pdk, pdk_root, final_view=out 
 STITCH = _DRIVER + """
 api.fabric_stitching({name: Path(path) for name, path in job["macros"].items()},
                      proj / "Fabric" / f"{api.fabric.name}.v", out, pdk, pdk_root,
-                     base_config_path=proj / "Fabric" / "gds_config.yaml")
+                     base_config_path=proj / "Fabric" / "gds_config.yaml", **job["config"])
 """
+# A tile passes OpenROAD's antenna check, and so does the fabric stitched from it,
+# by taking a pin's diode on trust: a tile's LEF gives the diffusion on a net, not
+# the layer that reaches it. The PDK's KLayout deck follows the layers as the wafer
+# is made, and on the first chip of small (2026-11-08) found the corner W_IO's
+# FrameStrobe[12]: 251 um of the stitch's Metal2, from the fabric's edge, into a
+# gate whose diode the tile's router had joined on Metal3; ratio 577, limit 400.
+# The stitch routes from Metal3 up, its long feeds on Metal4, and the stitched
+# fabric, every tile in it, is gated on the deck.
+STITCH_CONFIG = {"RT_MIN_LAYER": "Metal3"}
+ANTENNA_DECK = Path("gf180mcuD/libs.tech/klayout/tech/drc/rule_decks/antenna.drc")
 
 
 def _git_state(path):
@@ -319,7 +329,8 @@ def stitch(fabric, out, tile_runs, pdk_root=GF180, environ=None):
     """The fabric of a fabric this script generated, stitched by FABulous's
     fabric macro flow from the tile macros that harden() made in ``tile_runs``,
     in ``out``: macro/fabric/ with the final views, metrics.json and the log,
-    and manifest.json, whose "fabric" holds its TILE_GATE metrics. Every tile
+    and manifest.json, whose "fabric" holds its TILE_GATE metrics and the errors
+    of the KLayout antenna deck (STITCH_CONFIG says why). Every tile
     type the fabric places needs a clean macro, from exactly one of the runs."""
     fabric, out, pdk_root = Path(fabric).resolve(), Path(out).resolve(), Path(pdk_root).resolve()
     macros, sources = {}, []
@@ -338,11 +349,27 @@ def stitch(fabric, out, tile_runs, pdk_root=GF180, environ=None):
     if missing := sorted(_fabric_tiles(fabric) - set(macros)):
         raise RuntimeError(f"no clean macro of {', '.join(missing)}")
     python, tools, env, pdk_state = _macro_flows(fabric, out, pdk_root, environ)
-    gate = _macro_flow(STITCH, {"macros": macros}, out / "macro" / "fabric", python, env, out,
-                       pdk_root, pdk_state)
+    macro = out / "macro" / "fabric"
+    gate = _macro_flow(STITCH, {"macros": macros, "config": STITCH_CONFIG}, macro, python, env,
+                       out, pdk_root, pdk_state)
+    if "gate" in gate:
+        gds, = (macro / "final_views" / "gds").glob("*.gds")
+        errors = _klayout_antenna(gds, pdk_root, env, macro / "klayout_antenna.log")
+        gate["gate"]["klayout__antenna_error__count"] = errors
+        gate["clean"] = gate["clean"] and errors == 0
     _macro_manifest(out, fabric, tools, pdk_root, pdk_state, sources, fabric_macro=gate,
                     tile_macros=macros)
     return gate
+
+
+def _klayout_antenna(gds, pdk_root, env, log):
+    """The errors of the PDK's KLayout antenna deck in ``gds``, its top cell
+    named as the file, as LibreLane's Chip flow runs it; the report beside ``log``."""
+    report = log.with_suffix(".lyrdb")
+    _run(["klayout", "-b", "-zz", "-r", str(pdk_root / ANTENNA_DECK), "-rd", f"input={gds}",
+          "-rd", f"topcell={gds.stem}", "-rd", f"report={report}", "-rd", "run_mode=deep"],
+         env, log)
+    return report.read_text().count("<item>")
 
 
 def drop_pdk(env_file):

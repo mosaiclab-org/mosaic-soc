@@ -406,16 +406,26 @@ def test_the_rtl_hardcodes_only_the_technology_cells_we_know_about():
     """The porting surface, pinned. Three cells: the ICG and the clock buffer
     that drives the eFPGA's UserCLK (both per-PDK, hw/asic/<pdk>/tc_clk.sv), and
     a tristate pad driver. If another appears, this fails and someone has to
-    decide where it belongs."""
+    decide where it belongs.
+
+    Pad cells belong to one file only: the GF180 chip top of mosaic_chip_efpga
+    (2026-11-14), whose pins are its pad ring by nature, as Block A's are the
+    external padframe's."""
     import re
     from harness.core import REPO_ROOT
-    found = set()
+    found, pads = set(), {}
     for pat in ("hw/**/*.sv", "flow/librelane/experimental/*.sv"):
         for f in REPO_ROOT.glob(pat):
-            found |= set(re.findall(r"gf180mcu_fd_(?:sc|io)_\w+", _code(f.read_text())))
+            cells = set(re.findall(r"gf180mcu_fd_(?:sc|io)_\w+", _code(f.read_text())))
+            found |= cells
+            if any(c.startswith("gf180mcu_fd_io") for c in cells):
+                pads[f.name] = cells
     assert found == {"gf180mcu_fd_sc_mcu7t5v0__icgtp_1",
                      "gf180mcu_fd_sc_mcu7t5v0__clkbuf_8",
-                     "gf180mcu_fd_sc_mcu7t5v0__bufz_4"}, sorted(found)
+                     "gf180mcu_fd_sc_mcu7t5v0__bufz_4",
+                     "gf180mcu_fd_io__in_c", "gf180mcu_fd_io__in_s",
+                     "gf180mcu_fd_io__bi_t"}, sorted(found)
+    assert list(pads) == ["mosaic_chip_efpga.sv"], sorted(pads)
 
 
 def _code(src):

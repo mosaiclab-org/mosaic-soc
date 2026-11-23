@@ -70,7 +70,7 @@ soc:
 | `gpio_ao` | boolean | `true` | The always-on GPIO block. |
 | `ao_rv_timer` | boolean | `true` | The always-on timer. |
 | `ao_fast_intr` | boolean | `true` | The always-on fast interrupt controller. |
-| `efpga` | mapping with `preset`: `small` (4x4, 64 LUT4, 8 pads) or `medium` (8x8, 384 LUT4, 16 pads) | absent | An eFPGA fabric in the SoC: registers at `0x200C_0000`, user window at `0x5000_0000`, on every bus; with `scheduler.tdu`, the TDU's worker slot after the harts, so at most 15 harts. The physical flow refuses it, at any target: the wrapper and the fabric are synthesised, not hardened. Generating it needs `nix develop .#efpga`, which the generator enters itself. See [efpga.md](efpga.md). |
+| `efpga` | mapping with `preset`: `small` (4x4, 64 LUT4, 8 pads) or `medium` (8x8, 384 LUT4, 16 pads) | absent | An eFPGA fabric in the SoC: registers at `0x200C_0000`, user window at `0x5000_0000`, on every bus; with `scheduler.tdu`, the TDU's worker slot after the harts, so at most 15 harts. GF180 hardening uses a stitched hard macro through `efpga_block.sh`; `small` has block and chip layouts, while `medium` is simulation only. Generating it needs `nix develop .#efpga`, which the generator enters itself. See [efpga.md](efpga.md). |
 | `objectives` | mapping | absent | Physical-design intent. See [Objectives](#objectives). |
 
 The total number of harts across all groups is at most 16, and 15 with `soc.efpga` and the TDU.

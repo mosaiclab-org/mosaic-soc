@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
 //
 // tb_efpga_soc: a SoC hardened with the eFPGA fabric as a macro
-// (flow/librelane/scripts/efpga_block.sh), its netlist around the fabric's
-// netlist, through its pins only: it boots from the flash model of the RTL bench,
+// (flow/librelane/scripts/efpga_block.sh), as a block or, with CHIP, as a chip
+// with its pads, its netlist around the fabric's netlist, through its pins only: it boots from the flash model of the RTL bench,
 // executing in place, and the image (tb/mosaic_soc/run_generic.sh with
 // EFPGA_DESIGN) loads a design into the fabric, checks it and exits through
 // soc_ctrl, which drives status_valid_o and status_o. tb/efpga/run_soc_block.sh
@@ -25,6 +25,25 @@ module tb_efpga_soc;
     int maxcycles;
     longint cycles = 0;
 
+`ifdef CHIP
+    // A chip (flow/librelane/experimental/mosaic_chip_efpga.sv): the same pins as
+    // its pads, the pad cells' models from tb/efpga/gf180_pads.sv.
+    wire clk_pad = clk, rst_n_pad = rst_n, one = 1'b1;
+    `TOP dut (
+        .clk_PAD(clk_pad),
+        .rst_n_PAD(rst_n_pad),
+        .boot_select_PAD(one),
+        .execute_from_flash_PAD(one),
+        .uart_rx_PAD(one),
+        .uart_tx_PAD(uart_tx),
+        .spi_flash_sck_PAD(spi_sck),
+        .spi_flash_cs_PAD(spi_csb),
+        .spi_flash_sd_PAD(spi_sd),
+        .status_valid_PAD(status_valid),
+        .status_PAD(status),
+        .efpga_PAD(pads)
+    );
+`else
     `TOP dut (
         .clk_i(clk),
         .rst_ni(rst_n),
@@ -39,6 +58,7 @@ module tb_efpga_soc;
         .status_o(status),
         .efpga_pad_io(pads)
     );
+`endif
 
     spiflash flash_i (
         .csb(spi_csb),

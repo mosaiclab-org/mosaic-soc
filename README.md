@@ -84,6 +84,7 @@ repository is a layout that passes the signoff checks.
 | Level | Designs | Evidence |
 |---|---|---|
 | Signoff-clean on GF180MCU | Block A, the GF180MCU reference design: two SERV harts, no on-chip SRAM pool, code executed in place from external flash (`configs/mosaic_tapeout_ultra.yaml`) | Run `blocka_d15_rstsync`: a 1.2321 mm2 die at 82.9% utilisation, with design-rule, layout-versus-schematic, XOR, antenna and power-grid checks at zero and positive setup and hold slack on a 50 ns clock. Two waivers, recorded on 2026-09-24 and due for review on 2026-11-30. |
+| Signoff-clean on GF180MCU, with eFPGA | The two-SERV SoC of `configs/mosaic_block_efpga.yaml`, as a block and as `mosaic_chip_efpga` with its own pad ring | `block_efpga` has a 5.1580 mm² layout and a passing functional netlist bench. The third `chip_efpga` layout, completed 2026-11-14, is 20.1397 mm², with zero DRC, LVS, XOR, antenna and density errors, setup +8.939 ns and hold +0.496 ns at 20 MHz. Its eleven unused pad readbacks match an exact-name waiver. On that layout the four eFPGA designs meet timing at nine corners, and its netlist bench passed on 2026-11-19 ([docs/efpga.md](docs/efpga.md#the-chip-with-its-pad-ring)). |
 | Hardened but not tapeout-qualified | Block B (three SERV harts, `configs/mosaic_blockb_3hart.yaml`) and Block C (four SERV harts, `configs/mosaic_blockc_4hart.yaml`) | Runs `blockb_sdc`, `blockb_m45`, `blockc_sdc` and `blockc_m45` pass the hard checks and timing. They report fan-out violations that no waiver accepts, and `target: tapeout` refuses both designs. |
 | RTL and simulation only | Everything else: every core other than SERV, the `log` and `floonoc` bus fabrics, any design with an on-chip SRAM pool, external RAM, the DMA, the debug module or the interrupt controller, and any design on `pdk: sky130` or `pdk: ihp-sg13g2` | No layout. Simulation coverage differs by feature and some have none: see [Verification](#verification). |
 
@@ -91,8 +92,8 @@ Layout files are not in version control. The repository tracks only the
 `final/metrics.json` of the runs it cites. [docs/status.md](docs/status.md)
 lists what is proven, how each claim is checked, and the known defects.
 The levels rank physical evidence only; [Verification](#verification) says
-which features a simulated test covers. Status as of 2026-10-13; the eFPGA
-rows as of 2026-10-19.
+which features a simulated test covers. Chip physical evidence was updated on
+2026-11-17; the other results retain their recorded dates.
 
 ## Cores
 
@@ -368,9 +369,11 @@ Its limits:
 - The power figure comes from the timing tool's default switching activity, not
   from a simulated workload.
 - Gate-level simulation is functional only and is not a signoff hard check.
-- The chip-level targets with a pad ring (`make harden`, `make classic` in
+- The legacy chip-level targets with a pad ring (`make harden`, `make classic` in
   `flow/librelane/`) need inputs that the repository does not contain. A block
-  can be hardened against an external padframe DEF supplied by the user.
+  can be hardened against an external padframe DEF supplied by the user. The
+  eFPGA chip has a separate demonstrated path through `efpga_block.sh` with
+  `EFPGA_CHIP` and the checked-in wrapper and slot file.
 
 [docs/physical-flow.md](docs/physical-flow.md) describes the gates, the
 waivers and the measured results of every tracked run.

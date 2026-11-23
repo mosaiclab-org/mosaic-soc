@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
 #
 # tb/efpga/run_soc_block.sh — a SoC hardened with the eFPGA fabric as a macro
-# (flow/librelane/scripts/efpga_block.sh with a SoC configuration) in simulation:
+# (flow/librelane/scripts/efpga_block.sh with a SoC configuration, as a block or,
+# with EFPGA_CHIP, as a chip with its pads) in simulation:
 # its netlist around the fabric's netlist, no delays (the timing is
 # flow/librelane/scripts/efpga_block_sta.sh), in Verilator (efpga_fabric in
 # tb/efpga/common.sh says why). tb_efpga_soc.sv boots it from flash through its
@@ -30,6 +31,10 @@ source "$REPO/tb/efpga/common.sh"
 OBJ="$REPO/build/efpga_soc_obj"
 NETLIST="$(ls "$VIEWS"/nl/*.nl.v)"
 TOP="$(basename "$NETLIST" .nl.v)"
+# A chip has pads for pins (flow/librelane/experimental/mosaic_chip_efpga.sv), whose
+# cells the bench models itself, since Verilator has no switch primitives.
+PADS=
+! grep -qw clk_PAD "$NETLIST" || PADS="-DCHIP tb/efpga/gf180_pads.sv"
 # sed reads it all: `head` would end ls with SIGPIPE, which pipefail makes fatal.
 FLASH="$(ls -t "$REPO"/build/mosaic/*/runs/fusesoc.*/build/src/x-heep__tb-utils_0/yosys_spiflash.sv | sed -n 1p)"
 echo "### [1/4] generating the fabric ..."
@@ -70,7 +75,7 @@ sed -E "$RENAME" "$NETLIST" > "$OBJ/$TOP.d1.nl.v"
 verilator --cc --exe --main --timing --timescale 1ns/1ps --top-module tb_efpga_soc \
   --Mdir "$OBJ/model" -o Vtb --output-split 5000 --output-split-cfuncs 2000 $DEFS -DTOP="$TOP" \
   -Wno-fatal -Werror-USERFATAL -Wno-UNOPTFLAT -Wno-TIMESCALEMOD -CFLAGS -Wno-cpp \
-  $FABRIC "$OBJ/cells_d1.v" "$OBJ/$TOP.d1.nl.v" "$FLASH" tb/efpga/tb_efpga_soc.sv > "$OBJ/build.log" 2>&1 \
+  $FABRIC "$OBJ/cells_d1.v" "$OBJ/$TOP.d1.nl.v" "$FLASH" $PADS tb/efpga/tb_efpga_soc.sv > "$OBJ/build.log" 2>&1 \
   && make -j "${VJOBS:-2}" -C "$OBJ/model" -f Vtb_efpga_soc.mk OPT_FAST=-O2 >> "$OBJ/build.log" 2>&1 \
   || { tail -n 20 "$OBJ/build.log"; echo "TB FAIL reason=the_model_did_not_build"; exit 1; }
 # The RTL exits after 461,000 cycles, most of them the stream written from flash by a
@@ -79,9 +84,17 @@ verilator --cc --exe --main --timing --timescale 1ns/1ps --top-module tb_efpga_s
 echo "### [4/4] running, about 3 hours: progress every 20,000 cycles in $OBJ/verilator_*.log ..."
 RUN_TIMEOUT=21600
 run_case verilator shell_regs pass "$OBJ/model/Vtb" "+firmware=$OBJ/shell_regs.hex" +maxcycles=700000 > "$OBJ/case_shell_regs.txt" &
+shell_pid=$!
 run_case verilator task_count exit_value "$OBJ/model/Vtb" "+firmware=$OBJ/task_count.hex" +maxcycles=700000 > "$OBJ/case_task_count.txt" &
-wait
+task_pid=$!
+# A bare wait returns zero even when a child dies. Empty reports are not
+# successful cases: require both workers to finish and both expected verdicts.
+case_rc=0
+wait "$shell_pid" || case_rc=1
+wait "$task_pid" || case_rc=1
 cat "$OBJ/case_shell_regs.txt" "$OBJ/case_task_count.txt"
-! grep -q "^WRONG" "$OBJ/case_shell_regs.txt" "$OBJ/case_task_count.txt" \
+[ "$case_rc" -eq 0 ] \
+  && [ "$(cat "$OBJ/case_shell_regs.txt")" = 'ok     verilator_shell_regs: pass' ] \
+  && [ "$(cat "$OBJ/case_task_count.txt")" = 'ok     verilator_task_count: exit_value' ] \
   || { echo "TB FAIL reason=a_run_ended_otherwise_than_expected"; exit 1; }
-echo "TB PASS block=$TOP fabric=small netlist=fabric simulators=verilator images=2 controls=1 $(grep -o 'cycles=[0-9]*' "$OBJ/verilator_shell_regs.log" | tail -n 1)"
+echo "TB PASS block=$TOP fabric=small netlist=$(basename "$EFPGA_NETLIST") simulators=verilator images=2 controls=1 $(grep -o 'cycles=[0-9]*' "$OBJ/verilator_shell_regs.log" | tail -n 1)"

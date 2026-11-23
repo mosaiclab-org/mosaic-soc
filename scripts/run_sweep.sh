@@ -75,6 +75,7 @@ STEPS=(
   "efpga_netlist|^TB PASS netlist=small |tb/efpga/run_netlist.sh"
   "efpga_block|^TB PASS block=mosaic_efpga |flow/librelane/scripts/efpga_block.sh build/efpga_netlist/fabric && flow/librelane/scripts/efpga_block_sta.sh build/efpga_netlist/fabric flow/librelane/experimental/final_efpga_block counter8_en bus_regs task_count && tb/efpga/run_block.sh build/efpga_netlist/fabric flow/librelane/experimental/final_efpga_block"
   "efpga_block_soc|^TB PASS block=mosaic_block_efpga |flow/librelane/scripts/efpga_block.sh build/efpga_netlist/fabric block_efpga configs/mosaic_block_efpga.yaml && nix develop .#efpga --option warn-dirty false --command python3 util/mosaic_gen/efpga_gen.py --fabric build/efpga/small --out build/efpga_soc_designs --shell tb/efpga/shell_regs.v && flow/librelane/scripts/efpga_block_sta.sh build/efpga_netlist/fabric flow/librelane/experimental/final_block_efpga counter8_en bus_regs task_count build/efpga_soc_designs/shell_regs && tb/efpga/run_soc_block.sh build/efpga_netlist/fabric configs/mosaic_block_efpga.yaml flow/librelane/experimental/final_block_efpga"
+  "efpga_chip|^TB PASS block=mosaic_chip_efpga |EFPGA_CHIP=flow/librelane/slots/slot_1x1_efpga.yaml flow/librelane/scripts/efpga_block.sh build/efpga_netlist/fabric chip_efpga configs/mosaic_block_efpga.yaml && nix develop .#efpga --option warn-dirty false --command python3 util/mosaic_gen/efpga_gen.py --fabric build/efpga/small --out build/efpga_soc_designs --shell tb/efpga/shell_regs.v && flow/librelane/scripts/efpga_block_sta.sh build/efpga_netlist/fabric flow/librelane/experimental/final_chip_efpga counter8_en bus_regs task_count build/efpga_soc_designs/shell_regs && tb/efpga/run_soc_block.sh build/efpga_netlist/fabric configs/mosaic_block_efpga.yaml flow/librelane/experimental/final_chip_efpga"
   "efpga_timed|^### RESULT: EXIT SUCCESS.*, shell_regs.v loaded in the eFPGA and checked — timed at nine corners, 50 ns, one cycle in [0-9]*, the window measured: setup [0-9]|EFPGA_MACRO=build/efpga_netlist/fabric EFPGA_VIEWS=flow/librelane/experimental/final_block_efpga MOSAIC_CFG=configs/mosaic_block_efpga.yaml EFPGA_DESIGN=tb/efpga/shell_regs.v tb/mosaic_soc/run_generic.sh && mkdir -p build/efpga_timed && { EFPGA_MACRO=build/efpga_netlist/fabric MOSAIC_CFG=configs/mosaic_efpga_demo.yaml EFPGA_DESIGN=tb/efpga/long_chain.v EFPGA_TEST=tb/efpga/long_chain_test.c tb/mosaic_soc/run_fw.sh > build/efpga_timed/long_chain.log 2>&1; cat build/efpga_timed/long_chain.log; grep -q '^### RESULT: EXIT SUCCESS — production firmware ran .* with long_chain.v in its eFPGA, checked by long_chain_test.c, .* timed at nine corners, 50 ns, one cycle in [0-9]*, the window estimated: setup [0-9]' build/efpga_timed/long_chain.log && test \"\$(sed -n 's/^### RESULT: EXIT SUCCESS.* one cycle in \([0-9]*\),.*/\1/p' build/efpga_timed/long_chain.log)\" -gt 4; } && { EFPGA_DIV=4 EFPGA_MACRO=build/efpga_netlist/fabric MOSAIC_CFG=configs/mosaic_efpga_fast.yaml EFPGA_DESIGN=tb/efpga/task_count.v tb/mosaic_soc/run_fw.sh > build/efpga_timed/control.log 2>&1; cat build/efpga_timed/control.log; grep -q '^STA DESIGN FAIL design=task_count .* setup_ns=-' build/efpga_timed/control.log && grep -q '^### RESULT: refused — task_count fails timing at 31.25 ns, one cycle in 4 ' build/efpga_timed/control.log; }"
 
   "wake_obi|$EXIT_OK|tb/mosaic_soc/run.sh"
@@ -106,12 +107,18 @@ STEPS=(
 # efpga_block, after it, hardens the wrapper with that macro as one block, times
 # each design on it and simulates its netlist, about 1 hour. efpga_block_soc does
 # the same with Block A's SoC around the macro (configs/mosaic_block_efpga.yaml).
+# efpga_chip does it for that SoC as a chip in its own GF180 pad ring, in the
+# wafer.space 1x1 slot (flow/librelane/slots/slot_1x1_efpga.yaml), about 9 hours
+# for layout plus signoff: Magic DRC peaks at 6 GB for about 1 hour, and
+# KLayout DRC at 9 GB for about 5 hours with 16 GB swap on the 11.8 GB host.
+# Extraction and LVS add about 12 minutes (3 GB and 1 GB peaks). The netlist
+# bench adds 4 hours 15 minutes.
 # efpga_timed, after those two, times a user's design on that layout in the
 # one-command flow and runs it at the fabric's clock it meets; then a design of
 # 40 LUTs in a row, which needs more than four cycles, at its own; and its
 # control, task_count at 32 MHz (configs/mosaic_efpga_fast.yaml) asked to run at
 # four, must be refused on setup. About an hour.
-OPT_IN="efpga_netlist|efpga_block|efpga_block_soc|efpga_timed"
+OPT_IN="efpga_netlist|efpga_block|efpga_block_soc|efpga_chip|efpga_timed"
 opt_in() { printf '%s' "$1" | grep -qxE "$OPT_IN" && ! printf '%s' "$1" | grep -qxE "${ONLY:-^$}"; }
 
 if [ "$LIST_ONLY" = 1 ]; then

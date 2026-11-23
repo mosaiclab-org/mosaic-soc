@@ -83,7 +83,12 @@ and the TDU parks it when it does not. What follows does not exist.
   2026-11-07); each design runs at the least N it meets, which the firmware sets
   before it loads it, and a design that uses much of the fabric is timed, the
   arcs its configuration leaves dead taken out of the netlist OpenSTA reads
-  (2026-11-07). Left: a pad ring and a slot for the larger die, and `medium`.
+  (2026-11-07). The pad ring and larger slot now exist: `mosaic_chip_efpga`,
+  in a wafer.space 1x1 slot, passed physical signoff on its third layout on
+  2026-11-14, including KLayout's antenna and density decks. Its four designs
+  meet timing on that layout, and its netlist bench passes
+  ([efpga.md](efpga.md#the-chip-with-its-pad-ring)). Left: harden `medium`, and
+  extend the measured design and workload coverage.
 
 Open: which presets are offered, and the technology, GF180MCU or another.
 

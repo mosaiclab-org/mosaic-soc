@@ -1,13 +1,14 @@
 # Status
 
 What works today, how each claim is checked, and what is known to be wrong or
-missing. Last revised 2026-10-19.
+missing. Chip physical evidence updated 2026-11-17; older results retain their
+individual dates.
 
 Every design the generator can produce is at one of three levels.
 
 ## Level 1: signoff-clean on GF180MCU
 
-One design: **Block A, the GF180MCU reference design**
+**Block A, the GF180MCU reference design**
 (`configs/mosaic_tapeout_ultra.yaml`, wrapper `mosaic_block_a`).
 
 - Two SERV harts (one orchestrator, one worker), no on-chip SRAM pool, a
@@ -25,7 +26,20 @@ One design: **Block A, the GF180MCU reference design**
 - The waiver record states that gate-level simulation of this netlist passed.
   That log is not in version control.
 
-This is the only combination that `soc.target: tapeout` accepts.
+The same two-SERV configuration with `soc.efpga: {preset: small}` also has
+physical evidence (`configs/mosaic_block_efpga.yaml`): the `block_efpga` run
+contains the fabric as a macro, and `chip_efpga` adds its own GF180MCU pad ring.
+The third chip layout completed on 2026-11-14: a 20.1397 mm² die, zero router,
+Magic and KLayout DRC, zero LVS, XOR, antenna and density errors, setup
++8.939 ns and hold +0.496 ns at 20 MHz. The PPA gate accepts it with the
+exact eleven unused output-pad readbacks named in its waiver. Two fanout
+violations remain quality metrics; slew and capacitance pass.
+
+On the chip's layout, the four eFPGA designs pass timing at nine corners
+(2026-11-18), and its netlist, pads included, boots, loads and checks
+`shell_regs.v` in Verilator (2026-11-19); see
+[efpga.md](efpga.md#the-chip-with-its-pad-ring).
+This does not widen the core, bus or technology qualification matrix.
 
 ## Level 2: hardened but not tapeout-qualified
 
@@ -244,9 +258,11 @@ Physical:
   only SERV designs of 2 to 4 harts.
 - **The routing guard** recognises a plateau only after it has happened; it does
   not predict one before routing starts.
-- **The chip-level flow has no inputs.** `make harden` and `make classic` in
+- **The legacy chip-level Makefile targets have no inputs.** `make harden` and `make classic` in
   `flow/librelane/` need a physical bundle with SRAM macro views and a bound
-  pad adapter that the repository does not contain.
+  pad adapter that the repository does not contain. The eFPGA chip uses a
+  separate, demonstrated path: `EFPGA_CHIP` with `efpga_block.sh`, its checked-in
+  wrapper and slot file, and a stitched fabric macro.
 - **The Block A fan-out waiver names a pre-rename instance.** Its two violator
   names start with `clkbuf_0_i_core_v_mini_mcu`, as in the netlist of
   `blocka_d15_rstsync`. The wrapper now names that instance `i_mosaic_soc`, so

@@ -1,0 +1,124 @@
+┏━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┓
+┃ Macro/Instance   ┃ Power Pins            ┃ Disconnected ┃ Signal Pins            ┃ Disconnected       ┃
+┡━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━┩
+│ outputs[0\].pad  │ outputs[0\].pad/DVDD  │              │ outputs[0\].pad/A      │ outputs[0\].pad/Y  │
+│                  │ outputs[0\].pad/DVSS  │              │ outputs[0\].pad/CS     │                    │
+│                  │ outputs[0\].pad/VDD   │              │ outputs[0\].pad/IE     │                    │
+│                  │ outputs[0\].pad/VSS   │              │ outputs[0\].pad/OE     │                    │
+│                  │                       │              │ outputs[0\].pad/PAD    │                    │
+│                  │                       │              │ outputs[0\].pad/PD     │                    │
+│                  │                       │              │ outputs[0\].pad/PDRV0  │                    │
+│                  │                       │              │ outputs[0\].pad/PDRV1  │                    │
+│                  │                       │              │ outputs[0\].pad/PU     │                    │
+│                  │                       │              │ outputs[0\].pad/SL     │                    │
+├──────────────────┼───────────────────────┼──────────────┼────────────────────────┼────────────────────┤
+│ outputs[10\].pad │ outputs[10\].pad/DVDD │              │ outputs[10\].pad/A     │ outputs[10\].pad/Y │
+│                  │ outputs[10\].pad/DVSS │              │ outputs[10\].pad/CS    │                    │
+│                  │ outputs[10\].pad/VDD  │              │ outputs[10\].pad/IE    │                    │
+│                  │ outputs[10\].pad/VSS  │              │ outputs[10\].pad/OE    │                    │
+│                  │                       │              │ outputs[10\].pad/PAD   │                    │
+│                  │                       │              │ outputs[10\].pad/PD    │                    │
+│                  │                       │              │ outputs[10\].pad/PDRV0 │                    │
+│                  │                       │              │ outputs[10\].pad/PDRV1 │                    │
+│                  │                       │              │ outputs[10\].pad/PU    │                    │
+│                  │                       │              │ outputs[10\].pad/SL    │                    │
+├──────────────────┼───────────────────────┼──────────────┼────────────────────────┼────────────────────┤
+│ outputs[1\].pad  │ outputs[1\].pad/DVDD  │              │ outputs[1\].pad/A      │ outputs[1\].pad/Y  │
+│                  │ outputs[1\].pad/DVSS  │              │ outputs[1\].pad/CS     │                    │
+│                  │ outputs[1\].pad/VDD   │              │ outputs[1\].pad/IE     │                    │
+│                  │ outputs[1\].pad/VSS   │              │ outputs[1\].pad/OE     │                    │
+│                  │                       │              │ outputs[1\].pad/PAD    │                    │
+│                  │                       │              │ outputs[1\].pad/PD     │                    │
+│                  │                       │              │ outputs[1\].pad/PDRV0  │                    │
+│                  │                       │              │ outputs[1\].pad/PDRV1  │                    │
+│                  │                       │              │ outputs[1\].pad/PU     │                    │
+│                  │                       │              │ outputs[1\].pad/SL     │                    │
+├──────────────────┼───────────────────────┼──────────────┼────────────────────────┼────────────────────┤
+│ outputs[2\].pad  │ outputs[2\].pad/DVDD  │              │ outputs[2\].pad/A      │ outputs[2\].pad/Y  │
+│                  │ outputs[2\].pad/DVSS  │              │ outputs[2\].pad/CS     │                    │
+│                  │ outputs[2\].pad/VDD   │              │ outputs[2\].pad/IE     │                    │
+│                  │ outputs[2\].pad/VSS   │              │ outputs[2\].pad/OE     │                    │
+│                  │                       │              │ outputs[2\].pad/PAD    │                    │
+│                  │                       │              │ outputs[2\].pad/PD     │                    │
+│                  │                       │              │ outputs[2\].pad/PDRV0  │                    │
+│                  │                       │              │ outputs[2\].pad/PDRV1  │                    │
+│                  │                       │              │ outputs[2\].pad/PU     │                    │
+│                  │                       │              │ outputs[2\].pad/SL     │                    │
+├──────────────────┼───────────────────────┼──────────────┼────────────────────────┼────────────────────┤
+│ outputs[3\].pad  │ outputs[3\].pad/DVDD  │              │ outputs[3\].pad/A      │ outputs[3\].pad/Y  │
+│                  │ outputs[3\].pad/DVSS  │              │ outputs[3\].pad/CS     │                    │
+│                  │ outputs[3\].pad/VDD   │              │ outputs[3\].pad/IE     │                    │
+│                  │ outputs[3\].pad/VSS   │              │ outputs[3\].pad/OE     │                    │
+│                  │                       │              │ outputs[3\].pad/PAD    │                    │
+│                  │                       │              │ outputs[3\].pad/PD     │                    │
+│                  │                       │              │ outputs[3\].pad/PDRV0  │                    │
+│                  │                       │              │ outputs[3\].pad/PDRV1  │                    │
+│                  │                       │              │ outputs[3\].pad/PU     │                    │
+│                  │                       │              │ outputs[3\].pad/SL     │                    │
+├──────────────────┼───────────────────────┼──────────────┼────────────────────────┼────────────────────┤
+│ outputs[4\].pad  │ outputs[4\].pad/DVDD  │              │ outputs[4\].pad/A      │ outputs[4\].pad/Y  │
+│                  │ outputs[4\].pad/DVSS  │              │ outputs[4\].pad/CS     │                    │
+│                  │ outputs[4\].pad/VDD   │              │ outputs[4\].pad/IE     │                    │
+│                  │ outputs[4\].pad/VSS   │              │ outputs[4\].pad/OE     │                    │
+│                  │                       │              │ outputs[4\].pad/PAD    │                    │
+│                  │                       │              │ outputs[4\].pad/PD     │                    │
+│                  │                       │              │ outputs[4\].pad/PDRV0  │                    │
+│                  │                       │              │ outputs[4\].pad/PDRV1  │                    │
+│                  │                       │              │ outputs[4\].pad/PU     │                    │
+│                  │                       │              │ outputs[4\].pad/SL     │                    │
+├──────────────────┼───────────────────────┼──────────────┼────────────────────────┼────────────────────┤
+│ outputs[5\].pad  │ outputs[5\].pad/DVDD  │              │ outputs[5\].pad/A      │ outputs[5\].pad/Y  │
+│                  │ outputs[5\].pad/DVSS  │              │ outputs[5\].pad/CS     │                    │
+│                  │ outputs[5\].pad/VDD   │              │ outputs[5\].pad/IE     │                    │
+│                  │ outputs[5\].pad/VSS   │              │ outputs[5\].pad/OE     │                    │
+│                  │                       │              │ outputs[5\].pad/PAD    │                    │
+│                  │                       │              │ outputs[5\].pad/PD     │                    │
+│                  │                       │              │ outputs[5\].pad/PDRV0  │                    │
+│                  │                       │              │ outputs[5\].pad/PDRV1  │                    │
+│                  │                       │              │ outputs[5\].pad/PU     │                    │
+│                  │                       │              │ outputs[5\].pad/SL     │                    │
+├──────────────────┼───────────────────────┼──────────────┼────────────────────────┼────────────────────┤
+│ outputs[6\].pad  │ outputs[6\].pad/DVDD  │              │ outputs[6\].pad/A      │ outputs[6\].pad/Y  │
+│                  │ outputs[6\].pad/DVSS  │              │ outputs[6\].pad/CS     │                    │
+│                  │ outputs[6\].pad/VDD   │              │ outputs[6\].pad/IE     │                    │
+│                  │ outputs[6\].pad/VSS   │              │ outputs[6\].pad/OE     │                    │
+│                  │                       │              │ outputs[6\].pad/PAD    │                    │
+│                  │                       │              │ outputs[6\].pad/PD     │                    │
+│                  │                       │              │ outputs[6\].pad/PDRV0  │                    │
+│                  │                       │              │ outputs[6\].pad/PDRV1  │                    │
+│                  │                       │              │ outputs[6\].pad/PU     │                    │
+│                  │                       │              │ outputs[6\].pad/SL     │                    │
+├──────────────────┼───────────────────────┼──────────────┼────────────────────────┼────────────────────┤
+│ outputs[7\].pad  │ outputs[7\].pad/DVDD  │              │ outputs[7\].pad/A      │ outputs[7\].pad/Y  │
+│                  │ outputs[7\].pad/DVSS  │              │ outputs[7\].pad/CS     │                    │
+│                  │ outputs[7\].pad/VDD   │              │ outputs[7\].pad/IE     │                    │
+│                  │ outputs[7\].pad/VSS   │              │ outputs[7\].pad/OE     │                    │
+│                  │                       │              │ outputs[7\].pad/PAD    │                    │
+│                  │                       │              │ outputs[7\].pad/PD     │                    │
+│                  │                       │              │ outputs[7\].pad/PDRV0  │                    │
+│                  │                       │              │ outputs[7\].pad/PDRV1  │                    │
+│                  │                       │              │ outputs[7\].pad/PU     │                    │
+│                  │                       │              │ outputs[7\].pad/SL     │                    │
+├──────────────────┼───────────────────────┼──────────────┼────────────────────────┼────────────────────┤
+│ outputs[8\].pad  │ outputs[8\].pad/DVDD  │              │ outputs[8\].pad/A      │ outputs[8\].pad/Y  │
+│                  │ outputs[8\].pad/DVSS  │              │ outputs[8\].pad/CS     │                    │
+│                  │ outputs[8\].pad/VDD   │              │ outputs[8\].pad/IE     │                    │
+│                  │ outputs[8\].pad/VSS   │              │ outputs[8\].pad/OE     │                    │
+│                  │                       │              │ outputs[8\].pad/PAD    │                    │
+│                  │                       │              │ outputs[8\].pad/PD     │                    │
+│                  │                       │              │ outputs[8\].pad/PDRV0  │                    │
+│                  │                       │              │ outputs[8\].pad/PDRV1  │                    │
+│                  │                       │              │ outputs[8\].pad/PU     │                    │
+│                  │                       │              │ outputs[8\].pad/SL     │                    │
+├──────────────────┼───────────────────────┼──────────────┼────────────────────────┼────────────────────┤
+│ outputs[9\].pad  │ outputs[9\].pad/DVDD  │              │ outputs[9\].pad/A      │ outputs[9\].pad/Y  │
+│                  │ outputs[9\].pad/DVSS  │              │ outputs[9\].pad/CS     │                    │
+│                  │ outputs[9\].pad/VDD   │              │ outputs[9\].pad/IE     │                    │
+│                  │ outputs[9\].pad/VSS   │              │ outputs[9\].pad/OE     │                    │
+│                  │                       │              │ outputs[9\].pad/PAD    │                    │
+│                  │                       │              │ outputs[9\].pad/PD     │                    │
+│                  │                       │              │ outputs[9\].pad/PDRV0  │                    │
+│                  │                       │              │ outputs[9\].pad/PDRV1  │                    │
+│                  │                       │              │ outputs[9\].pad/PU     │                    │
+│                  │                       │              │ outputs[9\].pad/SL     │                    │
+└──────────────────┴───────────────────────┴──────────────┴────────────────────────┴────────────────────┘
